@@ -32,7 +32,7 @@ extern "C" {
 #define XVG_LABEL(...) 0
 #endif
 
-enum XVGShapeType
+typedef enum XVGShapeType
 {
     XVG_SHAPE_RECTANGLE, // With sharp corners
     XVG_SHAPE_ROUNDED_RECTANGLE_FILL,
@@ -45,16 +45,16 @@ enum XVGShapeType
     XVG_SHAPE_PIE_STROKE,
     XVG_SHAPE_ARC_ROUND_STROKE,
     XVG_SHAPE_ARC_BUTT_STROKE,
-};
+} XVGShapeType;
 
-enum XVGColourType
+typedef enum XVGColourType
 {
     XVG_COLOUR_SOLID,
     XVG_COLOUR_LINEAR_GRADEINT,
     XVG_COLOUR_RADIAL_GRADEINT,
     XVG_COLOUR_CONIC_GRADEINT,
     XVG_COLOUR_BOX_GRADEINT,
-};
+} XVGColourType;
 
 typedef struct XVG
 {
@@ -147,49 +147,22 @@ static uint32_t _xvg_compress_arc_rotate_and_range(float rotate_radians, float r
     return _xvg_packUnorm2x16(rotate_norm, range_norm);
 }
 
-static void xvg_draw_circle_fill(XVG* xvg, float cx, float cy, float radius_px, uint32_t colour)
+// If 'stroke_width' is 0, the circle will be filled
+static void xvg_draw_circle(XVG* xvg, float cx, float cy, float radius_px, float stroke_width, uint32_t colour)
 {
-    float feather = 2.0f / radius_px;
+    XVGShapeType shape_type = stroke_width > 0 ? XVG_SHAPE_CIRCLE_STROKE : XVG_SHAPE_CIRCLE_FILL;
+    float        feather    = 2.0f / radius_px;
     _xvg_add_shape(
         xvg,
         &(xvg_shape_t){
             .topleft     = {cx - radius_px, cy - radius_px},
             .bottomright = {cx + radius_px, cy + radius_px},
             .colour1     = colour,
-            .sdf_data    = _xvg_compress_sdf_data(XVG_SHAPE_CIRCLE_FILL, 0, feather, 0),
+            .sdf_data    = _xvg_compress_sdf_data(shape_type, 0, feather, stroke_width),
         });
 }
 
-static void xvg_draw_circle_stroke(XVG* xvg, float cx, float cy, float radius_px, float stroke_width, uint32_t colour)
-{
-    float feather = 2.0f / radius_px;
-    _xvg_add_shape(
-        xvg,
-        &(xvg_shape_t){
-            .topleft     = {cx - radius_px, cy - radius_px},
-            .bottomright = {cx + radius_px, cy + radius_px},
-            .colour1     = colour,
-            .sdf_data    = _xvg_compress_sdf_data(XVG_SHAPE_CIRCLE_STROKE, 0, feather, stroke_width),
-        });
-}
-
-static void
-xvg_draw_rounded_rectangle_fill(XVG* xvg, float x, float y, float w, float h, float border_radius, uint32_t colour)
-{
-    float feather = 4.0f / xm_minf(w, h);
-    _xvg_add_shape(
-        xvg,
-        &(xvg_shape_t){
-            .topleft     = {x, y},
-            .bottomright = {x + w, y + h},
-            .sdf_data    = _xvg_compress_sdf_data(XVG_SHAPE_ROUNDED_RECTANGLE_FILL, 0, feather, 0),
-            .borderradius_arcpie =
-                _xvg_compress_border_radius(border_radius, border_radius, border_radius, border_radius),
-            .colour1 = colour,
-        });
-}
-
-static void xvg_draw_rounded_rectangle_stroke(
+static void xvg_draw_rounded_rectangle(
     XVG*     xvg,
     float    x,
     float    y,
@@ -199,13 +172,14 @@ static void xvg_draw_rounded_rectangle_stroke(
     float    stroke_width,
     uint32_t colour)
 {
-    float feather = 4.0f / xm_minf(w, h);
+    XVGShapeType shape_type = stroke_width > 0 ? XVG_SHAPE_ROUNDED_RECTANGLE_STROKE : XVG_SHAPE_ROUNDED_RECTANGLE_FILL;
+    float        feather    = 4.0f / xm_minf(w, h);
     _xvg_add_shape(
         xvg,
         &(xvg_shape_t){
             .topleft     = {x, y},
             .bottomright = {x + w, y + h},
-            .sdf_data    = _xvg_compress_sdf_data(XVG_SHAPE_ROUNDED_RECTANGLE_STROKE, 0, feather, stroke_width),
+            .sdf_data    = _xvg_compress_sdf_data(shape_type, 0, feather, stroke_width),
 
             .borderradius_arcpie =
                 _xvg_compress_border_radius(border_radius, border_radius, border_radius, border_radius),
@@ -342,21 +316,7 @@ static void xvg_draw_rounded_rectangle_fill_inner_shadow(
         });
 }
 
-static void xvg_draw_triangle_fill(XVG* xvg, float x, float y, float w, float h, float rotate_radians, uint32_t colour)
-{
-    float feather = 4.0f / xm_minf(w, h);
-    _xvg_add_shape(
-        xvg,
-        &(xvg_shape_t){
-            .topleft             = {x, y},
-            .bottomright         = {x + w, y + h},
-            .colour1             = colour,
-            .sdf_data            = _xvg_compress_sdf_data(XVG_SHAPE_TRIANGLE_FILL, 0, feather, 0),
-            .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(rotate_radians, 0),
-        });
-}
-
-static void xvg_draw_triangle_stroke(
+static void xvg_draw_triangle(
     XVG*     xvg,
     float    x,
     float    y,
@@ -366,43 +326,20 @@ static void xvg_draw_triangle_stroke(
     float    stroke_width,
     uint32_t colour)
 {
-    float feather = 4.0f / xm_minf(w, h);
+    XVGShapeType shape_type = stroke_width > 0 ? XVG_SHAPE_TRIANGLE_STROKE : XVG_SHAPE_TRIANGLE_FILL;
+    float        feather    = 4.0f / xm_minf(w, h);
     _xvg_add_shape(
         xvg,
         &(xvg_shape_t){
             .topleft             = {x, y},
             .bottomright         = {x + w, y + h},
-            .sdf_data            = _xvg_compress_sdf_data(XVG_SHAPE_TRIANGLE_STROKE, 0, feather, stroke_width),
+            .sdf_data            = _xvg_compress_sdf_data(shape_type, 0, feather, stroke_width),
             .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(rotate_radians, 0),
             .colour1             = colour,
         });
 }
 
-static void xvg_draw_pie_fill(
-    XVG*     xvg,
-    float    cx,
-    float    cy,
-    float    radius_px,
-    float    start_radians,
-    float    end_radians,
-    uint32_t colour)
-{
-    float feather      = 2.0f / radius_px;
-    float angle_range  = end_radians - start_radians;
-    float angle_rotate = (end_radians + start_radians);
-    _xvg_add_shape(
-        xvg,
-        &(xvg_shape_t){
-            .topleft             = {cx - radius_px, cy - radius_px},
-            .bottomright         = {cx + radius_px, cy + radius_px},
-            .sdf_data            = _xvg_compress_sdf_data(XVG_SHAPE_PIE_FILL, 0, feather, 0),
-            .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(angle_rotate * 0.5f, angle_range * 0.5f),
-            .colour1             = colour,
-
-        });
-}
-
-static void xvg_draw_pie_stroke(
+static void xvg_draw_pie(
     XVG*     xvg,
     float    cx,
     float    cy,
@@ -412,21 +349,22 @@ static void xvg_draw_pie_stroke(
     float    stroke_width,
     uint32_t colour)
 {
-    float feather      = 2.0f / radius_px;
-    float angle_range  = end_radians - start_radians;
-    float angle_rotate = (end_radians + start_radians);
+    XVGShapeType shape_type   = stroke_width > 0 ? XVG_SHAPE_PIE_STROKE : XVG_SHAPE_PIE_FILL;
+    float        feather      = 2.0f / radius_px;
+    float        angle_range  = end_radians - start_radians;
+    float        angle_rotate = (end_radians + start_radians);
     _xvg_add_shape(
         xvg,
         &(xvg_shape_t){
             .topleft             = {cx - radius_px, cy - radius_px},
             .bottomright         = {cx + radius_px, cy + radius_px},
-            .sdf_data            = _xvg_compress_sdf_data(XVG_SHAPE_PIE_STROKE, 0, feather, stroke_width),
+            .sdf_data            = _xvg_compress_sdf_data(shape_type, 0, feather, stroke_width),
             .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(angle_rotate * 0.5f, angle_range * 0.5f),
             .colour1             = colour,
         });
 }
 
-static void xvg_draw_arc_stroke(
+static void xvg_draw_arc(
     XVG*     xvg,
     float    cx,
     float    cy,
