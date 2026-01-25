@@ -85,10 +85,10 @@ out flat vec2 gradient_b;
 #define XVG_SHAPE_ARC_BUTT_STROKE  10
 
 #define XVG_COLOUR_SOLID  0
-#define XVG_COLOUR_LINEAR_GRADEINT 1
-#define XVG_COLOUR_RADIAL_GRADEINT 2
-#define XVG_COLOUR_CONIC_GRADEINT  3
-#define XVG_COLOUR_BOX_GRADEINT    4
+#define XVG_COLOUR_LINEAR_GRADIENT 1
+#define XVG_COLOUR_RADIAL_GRADIENT 2
+#define XVG_COLOUR_CONIC_GRADIENT  3
+#define XVG_COLOUR_BOX_GRADIENT    4
 
 void main() {
     uint v_idx = gl_VertexIndex / 6u;
@@ -153,22 +153,22 @@ void main() {
         borderradius_arcpie.zw = vec2(sin(arcpie.y), cos(arcpie.y));
     }
 
-    if (grad_type == XVG_COLOUR_LINEAR_GRADEINT)
+    if (grad_type == XVG_COLOUR_LINEAR_GRADIENT)
     {
         gradient_a = (vert.gradient_a - vert.topleft) / vec2(vw, vh);  // stop 1 xy
         gradient_b = (vert.gradient_b   - vert.topleft) / vec2(vw, vh); // stop 2 xy
     }
-    if (grad_type == XVG_COLOUR_RADIAL_GRADEINT)
+    if (grad_type == XVG_COLOUR_RADIAL_GRADIENT)
     {
         gradient_a = (vert.gradient_a   - vert.topleft) / vec2(vw, vh); // stop 2 cx,cy
         gradient_b = vec2(vw, vh) / vert.gradient_b;                    // stop 1 radius
     }
-    if (grad_type == XVG_COLOUR_CONIC_GRADEINT)
+    if (grad_type == XVG_COLOUR_CONIC_GRADIENT)
     {
         gradient_a = vec2(cos(vert.gradient_a.x), sin(vert.gradient_a.x)); // rotation, radians
         gradient_b = vert.gradient_b;                                      // range, radians
     }
-    if (grad_type == XVG_COLOUR_BOX_GRADEINT)
+    if (grad_type == XVG_COLOUR_BOX_GRADIENT)
     {
         gradient_a = vec2(vert.gradient_a) / vec2(-vw, vh); // translate x/y
         gradient_b = vec2(vert.gradient_b     / vh);        // blur radius
@@ -210,10 +210,10 @@ out vec4 frag_color;
 #define XVG_SHAPE_ARC_BUTT_STROKE  10
 
 #define XVG_COLOUR_SOLID  0
-#define XVG_COLOUR_LINEAR_GRADEINT 1
-#define XVG_COLOUR_RADIAL_GRADEINT 2
-#define XVG_COLOUR_CONIC_GRADEINT  3
-#define XVG_COLOUR_BOX_GRADEINT    4
+#define XVG_COLOUR_LINEAR_GRADIENT 1
+#define XVG_COLOUR_RADIAL_GRADIENT 2
+#define XVG_COLOUR_CONIC_GRADIENT  3
+#define XVG_COLOUR_BOX_GRADIENT    4
 
 // The MIT License
 // Copyright © 2017 Inigo Quilez
@@ -355,7 +355,7 @@ void main()
     {
         col = unpackUnorm4x8(colour1).abgr; // swizzle
     }
-    if (grad_type == XVG_COLOUR_LINEAR_GRADEINT)
+    if (grad_type == XVG_COLOUR_LINEAR_GRADIENT)
     {
         vec2 uv_norm = vec2(uv.x * 0.5 + 0.5,  uv.y * -0.5 + 0.5);
 
@@ -364,7 +364,7 @@ void main()
         t = dot(v, w) / dot(v, v);
         t = clamp(t, 0, 1);
     }
-    if (grad_type == XVG_COLOUR_RADIAL_GRADEINT)
+    if (grad_type == XVG_COLOUR_RADIAL_GRADIENT)
     {
         // translate & scale
         vec2 uv_norm       = vec2(uv.x * 0.5 + 0.5,  uv.y * -0.5 + 0.5);
@@ -372,7 +372,7 @@ void main()
 
         t = clamp(length(ellipse_space), 0.0, 1.0);
     }
-    if (grad_type == XVG_COLOUR_CONIC_GRADEINT)
+    if (grad_type == XVG_COLOUR_CONIC_GRADIENT)
     {
         // Change start/end position of the gradient
         vec2 p = uv * uv_xy_scale;
@@ -385,7 +385,7 @@ void main()
         t = angle / (PI * 2) + 0.5;
         t = smoothstep(0, range, t);
     }
-    if (grad_type == XVG_COLOUR_BOX_GRADEINT)
+    if (grad_type == XVG_COLOUR_BOX_GRADIENT)
     {
         vec2  xy_offset   = gradient_a;
         float blur_radius = gradient_b.x;
