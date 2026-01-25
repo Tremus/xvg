@@ -1,8 +1,16 @@
+// ███████╗██╗  ██╗ █████╗ ██████╗ ███████╗███████╗
+// ██╔════╝██║  ██║██╔══██╗██╔══██╗██╔════╝██╔════╝
+// ███████╗███████║███████║██████╔╝█████╗  ███████╗
+// ╚════██║██╔══██║██╔══██║██╔═══╝ ██╔══╝  ╚════██║
+// ███████║██║  ██║██║  ██║██║     ███████╗███████║
+// ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚══════╝╚══════╝
+
 @vs vs_xvg_shapes
 
 // Tightly packed rectangle
 struct xvg_shape
 {
+    // TODO: compress to int16
     vec2 topleft;
     vec2 bottomright;
 
@@ -29,11 +37,11 @@ struct xvg_shape
     // uint  texid; // ???
 };
 
-layout(binding=0) readonly buffer ssbo {
+layout(binding=0) readonly buffer vs_xvg_shapes_buffer {
     xvg_shape vtx[];
 };
 
-layout(binding=0) uniform vs_params {
+layout(binding=0) uniform vs_xvg_shapes_uniforms {
     vec2 u_size;
     int  u_storage_buffer_offset;
 };
@@ -65,22 +73,22 @@ out flat vec2 gradient_a;
 // conic_gradient_angle
 out flat vec2 gradient_b;
 
-#define SDF_SHAPE_RECTANGLE_FILL   1
-#define SDF_SHAPE_RECTANGLE_STROKE 2
-#define SDF_SHAPE_CIRCLE_FILL      3
-#define SDF_SHAPE_CIRCLE_STROKE    4
-#define SDF_SHAPE_TRIANGLE_FILL    5
-#define SDF_SHAPE_TRIANGLE_STROKE  6
-#define SDF_SHAPE_PIE_FILL         7
-#define SDF_SHAPE_PIE_STROKE       8
-#define SDF_SHAPE_ARC_ROUND_STROKE 9
-#define SDF_SHAPE_ARC_BUTT_STROKE  10
+#define XVG_SHAPE_RECTANGLE_FILL   1
+#define XVG_SHAPE_RECTANGLE_STROKE 2
+#define XVG_SHAPE_CIRCLE_FILL      3
+#define XVG_SHAPE_CIRCLE_STROKE    4
+#define XVG_SHAPE_TRIANGLE_FILL    5
+#define XVG_SHAPE_TRIANGLE_STROKE  6
+#define XVG_SHAPE_PIE_FILL         7
+#define XVG_SHAPE_PIE_STROKE       8
+#define XVG_SHAPE_ARC_ROUND_STROKE 9
+#define XVG_SHAPE_ARC_BUTT_STROKE  10
 
-#define SDF_GRADEINT_SOLID  0
-#define SDF_GRADEINT_LINEAR 1
-#define SDF_GRADEINT_RADIAL 2
-#define SDF_GRADEINT_CONIC  3
-#define SDF_GRADEINT_BOX    4
+#define XVG_COLOUR_SOLID  0
+#define XVG_COLOUR_LINEAR_GRADEINT 1
+#define XVG_COLOUR_RADIAL_GRADEINT 2
+#define XVG_COLOUR_CONIC_GRADEINT  3
+#define XVG_COLOUR_BOX_GRADEINT    4
 
 void main() {
     uint v_idx = gl_VertexIndex / 6u;
@@ -128,39 +136,39 @@ void main() {
     stroke_width =      sdf_data.w * 16;
     stroke_width = 2 * stroke_width / vw * uv_xy_scale.x;
 
-    if (sdf_type == SDF_SHAPE_RECTANGLE_FILL ||
-        sdf_type == SDF_SHAPE_RECTANGLE_STROKE)
+    if (sdf_type == XVG_SHAPE_RECTANGLE_FILL ||
+        sdf_type == XVG_SHAPE_RECTANGLE_STROKE)
     {
         borderradius_arcpie = (unpackUnorm4x8(vert.borderradius_arcpie) * 255) / vec4(vh * 0.5);        
     }
 
-    if (sdf_type == SDF_SHAPE_TRIANGLE_FILL    ||
-        sdf_type == SDF_SHAPE_TRIANGLE_STROKE  ||
-        sdf_type == SDF_SHAPE_PIE_FILL         ||
-        sdf_type == SDF_SHAPE_PIE_STROKE       ||
-        sdf_type == SDF_SHAPE_ARC_ROUND_STROKE ||
-        sdf_type == SDF_SHAPE_ARC_BUTT_STROKE)
+    if (sdf_type == XVG_SHAPE_TRIANGLE_FILL    ||
+        sdf_type == XVG_SHAPE_TRIANGLE_STROKE  ||
+        sdf_type == XVG_SHAPE_PIE_FILL         ||
+        sdf_type == XVG_SHAPE_PIE_STROKE       ||
+        sdf_type == XVG_SHAPE_ARC_ROUND_STROKE ||
+        sdf_type == XVG_SHAPE_ARC_BUTT_STROKE)
     {
         borderradius_arcpie.xy = vec2(cos(arcpie.x), sin(arcpie.x));
         borderradius_arcpie.zw = vec2(sin(arcpie.y), cos(arcpie.y));
     }
 
-    if (grad_type == SDF_GRADEINT_LINEAR)
+    if (grad_type == XVG_COLOUR_LINEAR_GRADEINT)
     {
         gradient_a = (vert.gradient_a - vert.topleft) / vec2(vw, vh);  // stop 1 xy
         gradient_b = (vert.gradient_b   - vert.topleft) / vec2(vw, vh); // stop 2 xy
     }
-    else if (grad_type == SDF_GRADEINT_RADIAL)
+    if (grad_type == XVG_COLOUR_RADIAL_GRADEINT)
     {
         gradient_a = (vert.gradient_a   - vert.topleft) / vec2(vw, vh); // stop 2 cx,cy
         gradient_b = vec2(vw, vh) / vert.gradient_b;                    // stop 1 radius
     }
-    else if (grad_type == SDF_GRADEINT_CONIC)
+    if (grad_type == XVG_COLOUR_CONIC_GRADEINT)
     {
         gradient_a = vec2(cos(vert.gradient_a.x), sin(vert.gradient_a.x)); // rotation, radians
         gradient_b = vert.gradient_b;                                      // range, radians
     }
-    else if (grad_type == SDF_GRADEINT_BOX)
+    if (grad_type == XVG_COLOUR_BOX_GRADEINT)
     {
         gradient_a = vec2(vert.gradient_a) / vec2(-vw, vh); // translate x/y
         gradient_b = vec2(vert.gradient_b     / vh);        // blur radius
@@ -190,22 +198,22 @@ in flat vec2 gradient_b;
 out vec4 frag_color;
 
 #define PI 3.141592653589793
-#define SDF_SHAPE_RECTANGLE_FILL   1
-#define SDF_SHAPE_RECTANGLE_STROKE 2
-#define SDF_SHAPE_CIRCLE_FILL      3
-#define SDF_SHAPE_CIRCLE_STROKE    4
-#define SDF_SHAPE_TRIANGLE_FILL    5
-#define SDF_SHAPE_TRIANGLE_STROKE  6
-#define SDF_SHAPE_PIE_FILL         7
-#define SDF_SHAPE_PIE_STROKE       8
-#define SDF_SHAPE_ARC_ROUND_STROKE 9
-#define SDF_SHAPE_ARC_BUTT_STROKE  10
+#define XVG_SHAPE_RECTANGLE_FILL   1
+#define XVG_SHAPE_RECTANGLE_STROKE 2
+#define XVG_SHAPE_CIRCLE_FILL      3
+#define XVG_SHAPE_CIRCLE_STROKE    4
+#define XVG_SHAPE_TRIANGLE_FILL    5
+#define XVG_SHAPE_TRIANGLE_STROKE  6
+#define XVG_SHAPE_PIE_FILL         7
+#define XVG_SHAPE_PIE_STROKE       8
+#define XVG_SHAPE_ARC_ROUND_STROKE 9
+#define XVG_SHAPE_ARC_BUTT_STROKE  10
 
-#define SDF_GRADEINT_SOLID  0
-#define SDF_GRADEINT_LINEAR 1
-#define SDF_GRADEINT_RADIAL 2
-#define SDF_GRADEINT_CONIC  3
-#define SDF_GRADEINT_BOX    4
+#define XVG_COLOUR_SOLID  0
+#define XVG_COLOUR_LINEAR_GRADEINT 1
+#define XVG_COLOUR_RADIAL_GRADEINT 2
+#define XVG_COLOUR_CONIC_GRADEINT  3
+#define XVG_COLOUR_BOX_GRADEINT    4
 
 // The MIT License
 // Copyright © 2017 Inigo Quilez
@@ -264,13 +272,13 @@ void main()
 {
     float shape = 1;
     vec4 col = vec4(0);
-    if (sdf_type == SDF_SHAPE_RECTANGLE_FILL)
+    if (sdf_type == XVG_SHAPE_RECTANGLE_FILL)
     {
         vec2 b = uv_xy_scale;
         float d = sdRoundBox(uv * uv_xy_scale, b, borderradius_arcpie);
         shape = smoothstep(feather, 0, d + feather * 0.5);
     }
-    else if (sdf_type == SDF_SHAPE_RECTANGLE_STROKE)
+    if (sdf_type == XVG_SHAPE_RECTANGLE_STROKE)
     {
         vec2 b = uv_xy_scale;
         float d = sdRoundBox(uv * uv_xy_scale, b, borderradius_arcpie);
@@ -278,20 +286,20 @@ void main()
         float inner = smoothstep(feather, 0, d + stroke_width + feather * 0.5);
         shape = outer - inner;
     }
-    else if (sdf_type == SDF_SHAPE_CIRCLE_FILL)
+    if (sdf_type == XVG_SHAPE_CIRCLE_FILL)
     {
         float d = 1 - length(uv);
         float outer = smoothstep(0, feather, d + feather * 0.5);
         shape = outer;
     }
-    else if (sdf_type == SDF_SHAPE_CIRCLE_STROKE)
+    if (sdf_type == XVG_SHAPE_CIRCLE_STROKE)
     {
         float d = 1 - length(uv);
         float outer = smoothstep(0, feather, d + feather * 0.5);
         float inner = smoothstep(0, feather, d + feather * 0.5 - stroke_width);
         shape = outer - inner;
     }
-    else if (sdf_type == SDF_SHAPE_TRIANGLE_FILL)
+    if (sdf_type == XVG_SHAPE_TRIANGLE_FILL)
     {
         vec2 p = vec2(uv.x * borderradius_arcpie.x - uv.y * borderradius_arcpie.y,
                       uv.x * borderradius_arcpie.y + uv.y * borderradius_arcpie.x);
@@ -299,7 +307,7 @@ void main()
         float outer = smoothstep(feather, 0, d + feather * 0.5);
         shape = outer;
     }
-    else if (sdf_type == SDF_SHAPE_TRIANGLE_STROKE)
+    if (sdf_type == XVG_SHAPE_TRIANGLE_STROKE)
     {
         vec2 p = vec2(uv.x * borderradius_arcpie.x - uv.y * borderradius_arcpie.y,
                       uv.x * borderradius_arcpie.y + uv.y * borderradius_arcpie.x);
@@ -308,7 +316,7 @@ void main()
         float inner = smoothstep(feather, 0, d + feather * 0.5 + stroke_width);
         shape = outer - inner;
     }
-    else if (sdf_type == SDF_SHAPE_PIE_FILL)
+    if (sdf_type == XVG_SHAPE_PIE_FILL)
     {
         vec2 uv_rotated = vec2(uv.x * borderradius_arcpie.x - uv.y * borderradius_arcpie.y,
                                uv.x * borderradius_arcpie.y + uv.y * borderradius_arcpie.x);
@@ -316,7 +324,7 @@ void main()
         float outer = smoothstep(feather, 0, d + feather * 0.5);
         shape = outer;
     }
-    else if (sdf_type == SDF_SHAPE_PIE_STROKE)
+    if (sdf_type == XVG_SHAPE_PIE_STROKE)
     {
         vec2 uv_rotated = vec2(uv.x * borderradius_arcpie.x - uv.y * borderradius_arcpie.y,
                                uv.x * borderradius_arcpie.y + uv.y * borderradius_arcpie.x);
@@ -325,7 +333,7 @@ void main()
         float inner = smoothstep(feather, 0, d + feather * 0.5 + stroke_width);
         shape = outer - inner;
     }
-    else if (sdf_type == SDF_SHAPE_ARC_ROUND_STROKE)
+    if (sdf_type == XVG_SHAPE_ARC_ROUND_STROKE)
     {
         vec2 uv_rotated = vec2(uv.x * borderradius_arcpie.x - uv.y * borderradius_arcpie.y,
                                uv.x * borderradius_arcpie.y + uv.y * borderradius_arcpie.x);
@@ -333,7 +341,7 @@ void main()
         float outer = smoothstep(feather, 0, d + feather * 0.5);
         shape = outer;
     }
-    else if (sdf_type == SDF_SHAPE_ARC_BUTT_STROKE)
+    if (sdf_type == XVG_SHAPE_ARC_BUTT_STROKE)
     {
         vec2 uv_rotated = vec2(uv.x * borderradius_arcpie.x - uv.y * borderradius_arcpie.y,
                                uv.x * borderradius_arcpie.y + uv.y * borderradius_arcpie.x);
@@ -343,11 +351,11 @@ void main()
     }
 
     float t = 0;
-    if (grad_type == SDF_GRADEINT_SOLID)
+    if (grad_type == XVG_COLOUR_SOLID)
     {
         col = unpackUnorm4x8(colour1).abgr; // swizzle
     }
-    else if (grad_type == SDF_GRADEINT_LINEAR)
+    if (grad_type == XVG_COLOUR_LINEAR_GRADEINT)
     {
         vec2 uv_norm = vec2(uv.x * 0.5 + 0.5,  uv.y * -0.5 + 0.5);
 
@@ -356,7 +364,7 @@ void main()
         t = dot(v, w) / dot(v, v);
         t = clamp(t, 0, 1);
     }
-    else if (grad_type == SDF_GRADEINT_RADIAL)
+    if (grad_type == XVG_COLOUR_RADIAL_GRADEINT)
     {
         // translate & scale
         vec2 uv_norm       = vec2(uv.x * 0.5 + 0.5,  uv.y * -0.5 + 0.5);
@@ -364,7 +372,7 @@ void main()
 
         t = clamp(length(ellipse_space), 0.0, 1.0);
     }
-    else if (grad_type == SDF_GRADEINT_CONIC)
+    if (grad_type == XVG_COLOUR_CONIC_GRADEINT)
     {
         // Change start/end position of the gradient
         vec2 p = uv * uv_xy_scale;
@@ -377,7 +385,7 @@ void main()
         t = angle / (PI * 2) + 0.5;
         t = smoothstep(0, range, t);
     }
-    else if (grad_type == SDF_GRADEINT_BOX)
+    if (grad_type == XVG_COLOUR_BOX_GRADEINT)
     {
         vec2  xy_offset   = gradient_a;
         float blur_radius = gradient_b.x;
@@ -400,4 +408,170 @@ void main()
 }
 @end
 
-@program xvg_shapes vs_xvg_shapes fs_xvg_shapes
+@program _xvg_shapes vs_xvg_shapes fs_xvg_shapes
+
+// ██╗     ██╗███╗   ██╗███████╗███████╗
+// ██║     ██║████╗  ██║██╔════╝██╔════╝
+// ██║     ██║██╔██╗ ██║█████╗  ███████╗
+// ██║     ██║██║╚██╗██║██╔══╝  ╚════██║
+// ███████╗██║██║ ╚████║███████╗███████║
+// ╚══════╝╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝
+
+@vs vs_xvg_lines
+
+struct xvg_line_tile
+{
+    vec2 topleft;
+    vec2 bottomright;
+
+    int buffer_begin_idx;
+    int buffer_end_idx;
+
+    float stroke_width;
+    uint colour;
+};
+
+layout(binding=0) readonly buffer vs_xvg_tiles_buffer {
+    xvg_line_tile vtx[];
+};
+
+layout(binding=0) uniform vs_xvg_tiles_uniforms {
+    vec2 u_size;
+};
+
+out vec2 p;
+out float buffer_idx;
+
+out flat uint colour;
+out flat int buffer_begin_idx;
+out flat int buffer_end_idx;
+
+out flat float px_inc;
+out flat vec2 stroke_width;
+
+void main() {
+    uint v_idx = gl_VertexIndex / 6u;
+    uint i_idx = gl_VertexIndex - v_idx * 6;
+
+    xvg_line_tile vert = vtx[v_idx];
+
+    // Is odd
+    bool is_right = (gl_VertexIndex & 1) == 1;
+    bool is_bottom = i_idx >= 2 && i_idx <= 4;
+
+    buffer_idx = is_right ? vert.buffer_end_idx : vert.buffer_begin_idx;
+
+    buffer_begin_idx = vert.buffer_begin_idx;
+    buffer_end_idx   = vert.buffer_end_idx;
+    colour = vert.colour;
+
+    px_inc       = 2.0 / u_size.x;
+    stroke_width = 2 * vert.stroke_width / u_size;
+
+    p = vec2(
+        is_right  ? 1 : -1,
+        is_bottom ? -1 : 1
+    );
+
+    // Fixes tearing at seams of tiles 
+    vert.topleft.y     -= vert.stroke_width * 0.5;
+    vert.bottomright.y += vert.stroke_width * 0.5;
+
+    //  0.5f,  0.5f,
+    // -0.5f, -0.5f,
+    //  0.5f, -0.5f,
+    // -0.5f,  0.5f,
+    // 0, 1, 2,
+    // 1, 2, 3,
+    vec2 pos = vec2(
+        is_right  ? vert.bottomright.x : vert.topleft.x,
+        is_bottom ? vert.bottomright.y : vert.topleft.y
+    );
+
+    pos = (pos + pos) / u_size - vec2(1);
+    pos.y = -pos.y;
+
+    gl_Position = vec4(pos, 1, 1);
+}
+@end
+
+@fs fs_xvg_lines
+
+in vec2 p;
+in float buffer_idx;
+
+in flat uint  colour;
+in flat int buffer_begin_idx;
+in flat int buffer_end_idx;
+
+in flat float px_inc;
+in flat vec2 stroke_width;
+
+out vec4 frag_colour;
+
+struct xvg_line_segment {
+    float y;
+};
+
+layout(binding=1) readonly buffer fs_xvg_line_buffer {
+    xvg_line_segment sine_buffer[];
+};
+
+float sdSegment(in vec2 p, in vec2 a, in vec2 b)
+{
+    vec2  ba = b - a;
+    vec2  pa = p - a;
+    float h  = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+    return length(pa - h * ba);
+}
+
+void main()
+{
+    // Read buffer data
+
+    // If we pad the storage buffer by 1 on each side with real values, then we can get nicer looing clipped edges
+    uint idx      = min(int(buffer_idx),     buffer_end_idx - 1);
+    uint idx_prev = max(int(buffer_idx) - 1, buffer_begin_idx);
+    uint idx_next = min(int(buffer_idx) + 1, buffer_end_idx - 1);
+
+    float sine_y      = sine_buffer[idx].y;
+    float sine_y_prev = sine_buffer[idx_prev].y;
+    float sine_y_next = sine_buffer[idx_next].y;
+
+    sine_y      = sine_y      * 2 - 1;
+    sine_y_prev = sine_y_prev * 2 - 1;
+    sine_y_next = sine_y_next * 2 - 1;
+
+    float stroke_scale = 1 - stroke_width.y;
+    // float stroke_scale = 0.5;
+
+    sine_y      *= stroke_scale;
+    sine_y_prev *= stroke_scale;
+    sine_y_next *= stroke_scale;
+
+    // build points
+    vec2 a = vec2(p.x - px_inc, sine_y_prev);
+    vec2 b = vec2(p.x           , sine_y);
+    vec2 c = vec2(p.x + px_inc, sine_y_next);
+
+    float d1 = sdSegment(p, a, b);
+    float d2 = sdSegment(p, b, c);
+    float d = min(d1, d2);
+
+    float shape_vertical   = smoothstep(stroke_width.x, 0, abs(d));
+    float shape_horizontal = smoothstep(stroke_width.y, 0, abs(sine_y - p.y));
+    float shape            = max(shape_vertical, shape_horizontal);
+    shape = sqrt(shape); // gamma
+
+    vec4 col_line = unpackUnorm4x8(colour).abgr;
+
+    col_line.a *= shape;
+    frag_colour = col_line;
+
+    // Show tiles
+    // vec4 col_bg = vec4(0.5, 0, 0.5, 1);
+    // frag_colour = mix(col_bg, col_line, shape);
+}
+@end
+
+@program _xvg_lines vs_xvg_lines fs_xvg_lines

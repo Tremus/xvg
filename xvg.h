@@ -6,12 +6,22 @@
 #include <xhl/maths.h>
 #include <xhl/vector.h>
 
+// TODO: combine line tiles with shapes shader
+// TODO: increase max stroke width for line plots
+// TODO: rounded rectangle scissoring for line plots. Will require sdRoundBox()
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 #ifndef XVG_SHAPES_CAPACITY
 #define XVG_SHAPES_CAPACITY 8192
+#endif
+#ifndef XVG_LINE_BUFFER_CAPACITY
+#define XVG_LINE_BUFFER_CAPACITY 16384
+#endif
+#ifndef XVG_LINE_TILE_CAPACITY
+#define XVG_LINE_TILE_CAPACITY 128
 #endif
 
 #define XVG_ARRLEN(a) (sizeof(a) / sizeof(a[0]))
@@ -37,13 +47,13 @@ enum XVGShapeType
     XVG_SHAPE_ARC_BUTT_STROKE,
 };
 
-enum XVGGradeintType
+enum XVGColourType
 {
-    XVG_GRADEINT_NONE,
-    XVG_GRADEINT_LINEAR,
-    XVG_GRADEINT_RADIAL,
-    XVG_GRADEINT_CONIC,
-    XVG_GRADEINT_BOX,
+    XVG_COLOUR_SOLID,
+    XVG_COLOUR_LINEAR_GRADEINT,
+    XVG_COLOUR_RADIAL_GRADEINT,
+    XVG_COLOUR_CONIC_GRADEINT,
+    XVG_COLOUR_BOX_GRADEINT,
 };
 
 typedef struct XVG
@@ -55,8 +65,21 @@ typedef struct XVG
         sg_view     sbv;
     } shapes;
 
-    size_t      shapes_buffer_len;
-    xvg_shape_t shapes_buffer[XVG_SHAPES_CAPACITY];
+    struct
+    {
+        sg_pipeline pip;
+        sg_buffer   line_sbo; // normalised y values
+        sg_view     line_sbv;
+        sg_buffer   tile_sbo; // vertex pulling
+        sg_view     tile_sbv;
+    } lines;
+
+    size_t          shapes_buffer_len;
+    xvg_shape_t     shapes_buffer[XVG_SHAPES_CAPACITY];
+    size_t          line_buffer_len;
+    float           line_buffer[XVG_LINE_BUFFER_CAPACITY];
+    size_t          tile_buffer_len;
+    xvg_line_tile_t tile_buffer[XVG_LINE_TILE_CAPACITY];
 } XVG;
 
 void xvg_init(XVG*);
@@ -210,7 +233,8 @@ static void xvg_draw_rounded_rectangle_fill_linear(
         &(xvg_shape_t){
             .topleft     = {x, y},
             .bottomright = {x + w, y + h},
-            .sdf_data    = _xvg_compress_sdf_data(XVG_SHAPE_ROUNDED_RECTANGLE_FILL, XVG_GRADEINT_LINEAR, feather, 0),
+            .sdf_data =
+                _xvg_compress_sdf_data(XVG_SHAPE_ROUNDED_RECTANGLE_FILL, XVG_COLOUR_LINEAR_GRADEINT, feather, 0),
             .borderradius_arcpie =
                 _xvg_compress_border_radius(border_radius, border_radius, border_radius, border_radius),
 
@@ -241,7 +265,8 @@ static void xvg_draw_rounded_rectangle_fill_radial(
         &(xvg_shape_t){
             .topleft     = {x, y},
             .bottomright = {x + w, y + h},
-            .sdf_data    = _xvg_compress_sdf_data(XVG_SHAPE_ROUNDED_RECTANGLE_FILL, XVG_GRADEINT_RADIAL, feather, 0),
+            .sdf_data =
+                _xvg_compress_sdf_data(XVG_SHAPE_ROUNDED_RECTANGLE_FILL, XVG_COLOUR_RADIAL_GRADEINT, feather, 0),
             .borderradius_arcpie =
                 _xvg_compress_border_radius(border_radius, border_radius, border_radius, border_radius),
             .colour1    = col_stop_1,
@@ -274,7 +299,7 @@ static void xvg_draw_rounded_rectangle_fill_conic(
         &(xvg_shape_t){
             .topleft     = {x, y},
             .bottomright = {x + w, y + h},
-            .sdf_data    = _xvg_compress_sdf_data(XVG_SHAPE_ROUNDED_RECTANGLE_FILL, XVG_GRADEINT_CONIC, feather, 0),
+            .sdf_data = _xvg_compress_sdf_data(XVG_SHAPE_ROUNDED_RECTANGLE_FILL, XVG_COLOUR_CONIC_GRADEINT, feather, 0),
             .borderradius_arcpie =
                 _xvg_compress_border_radius(border_radius, border_radius, border_radius, border_radius),
 
@@ -306,7 +331,7 @@ static void xvg_draw_rounded_rectangle_fill_inner_shadow(
             .topleft     = {x, y},
             .bottomright = {x + w, y + h},
 
-            .sdf_data = _xvg_compress_sdf_data(XVG_SHAPE_ROUNDED_RECTANGLE_FILL, XVG_GRADEINT_BOX, feather, 0),
+            .sdf_data = _xvg_compress_sdf_data(XVG_SHAPE_ROUNDED_RECTANGLE_FILL, XVG_COLOUR_BOX_GRADEINT, feather, 0),
             .borderradius_arcpie =
                 _xvg_compress_border_radius(border_radius, border_radius, border_radius, border_radius),
 
@@ -430,6 +455,20 @@ static void xvg_draw_arc_stroke(
         });
 }
 
+// 'data' is expected to be an array of 'width' length
+// 'data' is expected to contain normalised values where 0 == (y + height), and 1 == y
+// 'data' is allowed to go beyond [0-1], however you should consider using sg_apply_scissor_rect()
+// 'stroke_width' is limited to the range [1-2]
+void xvg_draw_line_plot(
+    XVG*         xvg,
+    int          x,
+    int          y,
+    int          width,
+    int          height,
+    const float* data,
+    float        stroke_width,
+    uint32_t     colour);
+
 #ifdef __cplusplus
 }
 #endif
@@ -438,22 +477,72 @@ static void xvg_draw_arc_stroke(
 
 #ifdef XVG_IMPL
 #undef XVG_IMPL
+#include <string.h>
+
+void xvg_draw_line_plot(
+    XVG*         xvg,
+    int          x,
+    int          y,
+    int          width,
+    int          height,
+    const float* data,
+    float        stroke_width,
+    uint32_t     colour)
+{
+    xassert(xvg->tile_buffer_len < XVG_ARRLEN(xvg->tile_buffer));
+    if (xvg->tile_buffer_len >= XVG_ARRLEN(xvg->tile_buffer))
+        return;
+
+    int end_idx = xvg->line_buffer_len + width;
+    if (end_idx > XVG_ARRLEN(xvg->line_buffer))
+        end_idx = XVG_ARRLEN(xvg->line_buffer);
+
+    const int N = end_idx - xvg->line_buffer_len;
+    xassert(N > 0);
+    if (N <= 0)
+        return;
+
+    int backingScaleFactor = 1;
+    if (backingScaleFactor == 1)
+    {
+        memcpy(xvg->line_buffer + xvg->line_buffer_len, data, N * sizeof(xvg->line_buffer[0]));
+    }
+    else
+    {
+        // TODO: handle retina screens. Linear interpolation between points should be fine
+        xassert(false);
+    }
+
+    xassert(end_idx >= 1);
+    xvg->tile_buffer[xvg->tile_buffer_len++] = (xvg_line_tile_t){
+        .topleft          = {x, y},
+        .bottomright      = {x + width, y + height},
+        .buffer_begin_idx = xvg->line_buffer_len,
+        .buffer_end_idx   = end_idx,
+        .stroke_width     = stroke_width,
+        .colour           = colour,
+    };
+
+    xvg->line_buffer_len += N;
+    xassert(xvg->line_buffer_len <= XVG_ARRLEN(xvg->line_buffer));
+}
 
 void xvg_init(XVG* xvg)
 {
+    static const sg_color_target_state BLEND_DEFAULT = {
+        .write_mask = SG_COLORMASK_RGBA,
+        .blend      = {
+                 .enabled          = true,
+                 .src_factor_rgb   = SG_BLENDFACTOR_SRC_ALPHA,
+                 .src_factor_alpha = SG_BLENDFACTOR_ONE,
+                 .dst_factor_rgb   = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
+                 .dst_factor_alpha = SG_BLENDFACTOR_ONE,
+        }};
+
     xvg->shapes.pip = sg_make_pipeline(&(sg_pipeline_desc){
-        .shader = sg_make_shader(xvg_shapes_shader_desc(sg_query_backend())),
-        .colors[0] =
-            {.write_mask = SG_COLORMASK_RGBA,
-             .blend =
-                 {
-                     .enabled          = true,
-                     .src_factor_rgb   = SG_BLENDFACTOR_SRC_ALPHA,
-                     .src_factor_alpha = SG_BLENDFACTOR_ONE,
-                     .dst_factor_rgb   = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
-                     .dst_factor_alpha = SG_BLENDFACTOR_ONE,
-                 }},
-        .label = "pipeline"});
+        .shader    = sg_make_shader(_xvg_shapes_shader_desc(sg_query_backend())),
+        .colors[0] = BLEND_DEFAULT,
+        .label     = XVG_LABEL("xvg-shapes-pipeline")});
 
     xvg->shapes.sbo = sg_make_buffer(&(sg_buffer_desc){
         .usage.storage_buffer = true,
@@ -464,6 +553,27 @@ void xvg_init(XVG* xvg)
     xvg->shapes.sbv = sg_make_view(&(sg_view_desc){
         .storage_buffer = xvg->shapes.sbo,
     });
+
+    xvg->lines.pip = sg_make_pipeline(&(sg_pipeline_desc){
+        .shader    = sg_make_shader(_xvg_lines_shader_desc(sg_query_backend())),
+        .colors[0] = BLEND_DEFAULT,
+        .label     = XVG_LABEL("xvg-line-pipeline")});
+
+    xvg->lines.line_sbo = sg_make_buffer(&(sg_buffer_desc){
+        .usage.storage_buffer = true,
+        .usage.stream_update  = true,
+        .size                 = sizeof(xvg->line_buffer),
+        .label                = XVG_LABEL("xvg-line-buffer"),
+    });
+    xvg->lines.line_sbv = sg_make_view(&(sg_view_desc){.storage_buffer = xvg->lines.line_sbo});
+
+    xvg->lines.tile_sbo = sg_make_buffer(&(sg_buffer_desc){
+        .usage.storage_buffer = true,
+        .usage.stream_update  = true,
+        .size                 = sizeof(xvg->tile_buffer),
+        .label                = XVG_LABEL("xvg-tile-buffer"),
+    });
+    xvg->lines.tile_sbv = sg_make_view(&(sg_view_desc){.storage_buffer = xvg->lines.tile_sbo});
 }
 
 void xvg_deinit(XVG*)
@@ -471,15 +581,33 @@ void xvg_deinit(XVG*)
     // :)
 }
 
-void xvg_begin_frame(XVG* xvg) { xvg->shapes_buffer_len = 0; }
+void xvg_begin_frame(XVG* xvg)
+{
+    xvg->shapes_buffer_len = 0;
+    xvg->line_buffer_len   = 0;
+    xvg->tile_buffer_len   = 0;
+}
 
 void xvg_end_frame(XVG* xvg, int window_width, int window_height)
 {
     // Upload data
     if (xvg->shapes_buffer_len)
     {
-        sg_range range = {.ptr = xvg->shapes_buffer, sizeof(xvg->shapes_buffer[0]) * xvg->shapes_buffer_len};
+        size_t   num_bytes = sizeof(xvg->shapes_buffer[0]) * xvg->shapes_buffer_len;
+        sg_range range     = {.ptr = xvg->shapes_buffer, .size = num_bytes};
         sg_update_buffer(xvg->shapes.sbo, &range);
+    }
+    if (xvg->line_buffer_len)
+    {
+        size_t   num_bytes = sizeof(xvg->line_buffer[0]) * xvg->line_buffer_len;
+        sg_range range     = {.ptr = xvg->line_buffer, .size = num_bytes};
+        sg_update_buffer(xvg->lines.line_sbo, &range);
+    }
+    if (xvg->tile_buffer_len)
+    {
+        size_t   num_bytes = sizeof(xvg->tile_buffer[0]) * xvg->tile_buffer_len;
+        sg_range range     = {.ptr = xvg->tile_buffer, .size = num_bytes};
+        sg_update_buffer(xvg->lines.tile_sbo, &range);
     }
 
     // Draw shapes
@@ -489,14 +617,30 @@ void xvg_end_frame(XVG* xvg, int window_width, int window_height)
         sg_apply_pipeline(xvg->shapes.pip);
 
         sg_apply_bindings(&(sg_bindings){
-            .views[VIEW_ssbo] = xvg->shapes.sbv,
+            .views[VIEW_vs_xvg_tiles_buffer] = xvg->shapes.sbv,
         });
-        vs_params_t uniforms = {
+        vs_xvg_shapes_uniforms_t uniforms = {
             .u_size                  = {(float)window_width, (float)window_height},
             .u_storage_buffer_offset = 0,
         };
-        sg_apply_uniforms(UB_vs_params, &SG_RANGE(uniforms));
+        sg_apply_uniforms(UB_vs_xvg_shapes_uniforms, &SG_RANGE(uniforms));
         sg_draw(0, xvg->shapes_buffer_len * 6, 1);
+    }
+
+    if (xvg->tile_buffer_len)
+    {
+        sg_apply_pipeline(xvg->lines.pip);
+        sg_apply_bindings(&(sg_bindings){
+            .views[VIEW_vs_xvg_tiles_buffer] = xvg->lines.tile_sbv,
+            .views[VIEW_fs_xvg_line_buffer]  = xvg->lines.line_sbv,
+        });
+
+        vs_xvg_tiles_uniforms_t uniforms = {
+            .u_size = {(float)window_width, (float)window_height},
+        };
+        sg_apply_uniforms(UB_vs_xvg_tiles_uniforms, &SG_RANGE(uniforms));
+
+        sg_draw(0, 6 * xvg->tile_buffer_len, 1);
     }
 }
 
