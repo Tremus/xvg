@@ -595,6 +595,7 @@ struct xvg_text
     vec2 coord_bottomright;
     uint tex_topleft;
     uint tex_bottomright;
+    uint colour;
 };
 
 layout(binding=0) readonly buffer vs_xvg_text_buffer {
@@ -608,6 +609,7 @@ layout(binding=0) uniform vs_xvg_text_uniforms {
 };
 
 out vec2 texcoord;
+out flat vec4 colour;
 
 void main() {
     uint v_idx = gl_VertexIndex / 6u;
@@ -640,43 +642,41 @@ void main() {
         is_right  ? tex_bottomright.x : tex_topleft.x,
         is_bottom ? tex_bottomright.y : tex_topleft.y
     );
+
+    colour = unpackUnorm4x8(obj.colour).abgr;
 }
 @end
 
 @fs fs_xvg_text_singlechannel
-layout(binding=1) uniform texture2D text_tex;
-layout(binding=0) uniform sampler text_smp;
-
-layout(binding=1) uniform fs_text_singlechannel_uniforms {
-    vec4 u_colour;
-};
+layout(binding=1) uniform texture2D fs_xvg_text_tex;
+layout(binding=0) uniform sampler fs_xvg_text_smp;
 
 in vec2 texcoord;
+in flat vec4 colour;
+
 out vec4 frag_colour;
 
 void main() {
-    float alpha = texture(sampler2D(text_tex, text_smp), texcoord).r;
-    frag_colour = vec4(u_colour.rgb, u_colour.a * alpha);
+    float alpha = texture(sampler2D(fs_xvg_text_tex, fs_xvg_text_smp), texcoord).r;
+    frag_colour = vec4(colour.rgb, colour.a * alpha);
 }
 @end
 
 @fs fs_xvg_text_multichannel
-layout(binding=1) uniform texture2D text_tex;
-layout(binding=0) uniform sampler text_smp;
+layout(binding=1) uniform texture2D fs_xvg_text_tex;
+layout(binding=0) uniform sampler fs_xvg_text_smp;
 
 in vec2 texcoord;
+in flat vec4 colour;
+
 layout(location=0, index=0) out vec4 frag_colour;
 layout(location=0, index=1) out vec4 blend_weights;
 
-layout(binding=1) uniform fs_text_multichannel_uniforms {
-    vec4 u_colour;
-};
-
 void main() {
-    vec3 pixel_coverages = texture(sampler2D(text_tex, text_smp), texcoord).rgb;
+    vec3 pixel_coverages = texture(sampler2D(fs_xvg_text_tex, fs_xvg_text_smp), texcoord).rgb;
 
-    frag_colour = u_colour * vec4(pixel_coverages, 1);
-	blend_weights = vec4(u_colour.a * pixel_coverages, u_colour.a);
+    frag_colour = colour * vec4(pixel_coverages, 1);
+	blend_weights = vec4(colour.a * pixel_coverages, colour.a);
 }
 @end
 
