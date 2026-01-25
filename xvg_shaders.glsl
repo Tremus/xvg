@@ -587,15 +587,10 @@ void main()
 
 struct xvg_text
 {
-    // NOTE: coord_topleft coords could be compressed to uint16. To support signedness, apply +32767 delta building the SBO, then subtract -32767 here
-    // NOTE: tex atlas coords are 0-255, could be compressed to Unorm4x8
-    // NOTE: coord_bottomright is redundant, could be calculated using topleft + atlas_coords.zw * 255
+    uint atlas_coords; // Unorm4x8
+    uint topleft; // Unorm2x16. Contains signed xy coords, requires -32767 delta
 
-    vec2 coord_topleft;
-    vec2 coord_bottomright;
-    uint tex_topleft;
-    uint tex_bottomright;
-    uint colour;
+    uint colour; // Unorm4x8
 };
 
 layout(binding=0) readonly buffer vs_xvg_text_buffer {
@@ -628,20 +623,22 @@ void main() {
     bool is_right = (gl_VertexIndex & 1) == 1;
     bool is_bottom = i_idx >= 2 && i_idx <= 4;
 
+    vec4 atlas_coords = unpackUnorm4x8(obj.atlas_coords);
+    vec2 glyph_size   = atlas_coords.zw * vec2(255);
+    texcoord = vec2(
+        is_right  ? (atlas_coords.x + atlas_coords.z) : atlas_coords.x,
+        is_bottom ? (atlas_coords.y + atlas_coords.w) : atlas_coords.y
+    );
+
+    vec2 topleft = unpackUnorm2x16(obj.coord_topleft2) * vec2(65535) - vec2(32767);
+
     vec2 pos = vec2(
-        is_right  ? obj.coord_bottomright.x : obj.coord_topleft.x,
-        is_bottom ? obj.coord_bottomright.y : obj.coord_topleft.y
+        is_right  ? (topleft.x + glyph_size.x) : topleft.x,
+        is_bottom ? (topleft.y + glyph_size.y) : topleft.y
     );
     pos = (pos - u_xy_offset) * 2 / u_view_size - vec2(1);
 
 	gl_Position = vec4(pos.x, -pos.y, 0, 1);
-
-    vec2 tex_topleft = unpackUnorm2x16(obj.tex_topleft);
-    vec2 tex_bottomright = unpackUnorm2x16(obj.tex_bottomright);
-    texcoord = vec2(
-        is_right  ? tex_bottomright.x : tex_topleft.x,
-        is_bottom ? tex_bottomright.y : tex_topleft.y
-    );
 
     colour = unpackUnorm4x8(obj.colour).abgr;
 }

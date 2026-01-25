@@ -202,12 +202,12 @@ static XVGTextLayoutRow* xvg_layout_get_rows(const XVGTextLayout* l)
 {
     return (XVGTextLayoutRow*)((char*)l + l->offset_rows);
 }
-static void xvg_LayoutSetRows(XVGTextLayout* l, XVGTextLayoutRow* r) { l->offset_rows = ((char*)r - (char*)l); }
+static void xvg_layout_set_rows(XVGTextLayout* l, XVGTextLayoutRow* r) { l->offset_rows = ((char*)r - (char*)l); }
 static XVGGlyphLayout* xvg_layout_get_glyphs(const XVGTextLayout* l)
 {
     return (XVGGlyphLayout*)((char*)l + l->offset_glyphs);
 }
-static void xvg_LayoutSetGlyphs(XVGTextLayout* l, XVGGlyphLayout* g) { l->offset_glyphs = ((char*)g - (char*)l); }
+static void xvg_layout_set_glyphs(XVGTextLayout* l, XVGGlyphLayout* g) { l->offset_glyphs = ((char*)g - (char*)l); }
 
 typedef struct XVG
 {
@@ -272,7 +272,7 @@ typedef struct XVG
     } text;
 
 #ifndef XVG_SHAPES_CAPACITY
-#define XVG_SHAPES_CAPACITY 8192
+#define XVG_SHAPES_CAPACITY 2048
 #endif
     size_t      shapes_buffer_len;
     xvg_shape_t shapes_buffer[XVG_SHAPES_CAPACITY];
@@ -362,6 +362,24 @@ static uint32_t _xvg_compress_arc_rotate_and_range(float rotate_radians, float r
     xassert(rotate_norm >= 0 && rotate_norm <= 1);
     xassert(range_norm >= 0 && range_norm <= 1);
     return _xvg_packUnorm2x16(rotate_norm, range_norm);
+}
+
+static uint32_t _xvg_pack_xy_coord(int x, int y)
+{
+    union
+    {
+        struct
+        {
+            int16_t low;
+            int16_t high;
+        };
+        uint32_t u32;
+    } v;
+    v.low   = x;
+    v.high  = y;
+    v.low  += 32767;
+    v.high += 32767;
+    return v.u32;
 }
 
 // Shapes
@@ -817,16 +835,12 @@ enum
 #endif
 #endif // XVG_FONT_FREETYPE_SINGLECHANNEL || XVG_FONT_FREETYPE_MULTICHANNEL
 
-    XVG_ATLAS_SIZE_SHIFT   = 8,
-    XVG_ATLAS_WIDTH        = (1 << XVG_ATLAS_SIZE_SHIFT),
-    XVG_ATLAS_HEIGHT       = XVG_ATLAS_WIDTH,
-    XVG_ATLAS_ROW_STRIDE   = XVG_ATLAS_WIDTH * XVG_GLYPH_ATLAS_CHANNELS,
-    XVG_ATLAS_UINT16_SHIFT = (16 - XVG_ATLAS_SIZE_SHIFT),
+    XVG_ATLAS_WIDTH      = 256,
+    XVG_ATLAS_HEIGHT     = XVG_ATLAS_WIDTH,
+    XVG_ATLAS_ROW_STRIDE = XVG_ATLAS_WIDTH * XVG_GLYPH_ATLAS_CHANNELS,
 
     RECTPACK_PADDING = 1,
 };
-_Static_assert(XVG_ATLAS_WIDTH <= (1llu << 16), "");
-_Static_assert((XVG_ATLAS_WIDTH << XVG_ATLAS_UINT16_SHIFT) == (1 << 16), "");
 
 XVGAtlas _xvg_create_new_atlas()
 {
@@ -997,51 +1011,15 @@ XVGAtlasRect _xvg_get_glyph(XVG* xvg, uint32_t glyph_index, float font_size)
 
 bool _xvg_push_glyph(XVG* xvg, int pen_x, int pen_y, const XVGAtlasRect* rect, uint32_t colour)
 {
-    bool should_push = xvg->text_buffer_len < XVG_ARRLEN(xvg->text_buffer);
-    // XVG_ASSERT(should_push);
-    should_push &= rect->img_view.id != 0;
+    bool should_push  = xvg->text_buffer_len < XVG_ARRLEN(xvg->text_buffer);
+    should_push      &= rect->img_view.id != 0;
+    XVG_ASSERT(should_push);
     if (should_push)
     {
-        uint32_t tex_l = rect->x;
-        uint32_t tex_t = rect->y;
-        uint32_t tex_r = rect->x + rect->w;
-        uint32_t tex_b = rect->y + rect->h;
-
-        xassert(tex_l >= 0 && tex_l < XVG_ATLAS_WIDTH);
-        xassert(tex_t >= 0 && tex_t < XVG_ATLAS_HEIGHT);
-        xassert(tex_r >= 0 && tex_r < XVG_ATLAS_WIDTH);
-        xassert(tex_b >= 0 && tex_b < XVG_ATLAS_HEIGHT);
-
-        // atlas coordinates to UINT16 normalised texture coordinates
-        tex_l <<= XVG_ATLAS_UINT16_SHIFT;
-        tex_t <<= XVG_ATLAS_UINT16_SHIFT;
-        tex_r <<= XVG_ATLAS_UINT16_SHIFT;
-        tex_b <<= XVG_ATLAS_UINT16_SHIFT;
-        xassert(tex_l < (1 << 16));
-        xassert(tex_t < (1 << 16));
-        xassert(tex_r < (1 << 16));
-        xassert(tex_b < (1 << 16));
-
-        float glyph_left   = pen_x + (float)rect->bearing_x;
-        float glyph_top    = pen_y - (float)rect->bearing_y;
-        float glyph_right  = glyph_left + (float)rect->w;
-        float glyph_bottom = glyph_top + (float)rect->h;
-
-        xassert(glyph_left < (1 << 16));
-        xassert(glyph_top < (1 << 16));
-        xassert(glyph_right < (1 << 16));
-        xassert(glyph_bottom < (1 << 16));
-
-        xvg_text_t* obj           = xvg->text_buffer + xvg->text_buffer_len;
-        obj->coord_topleft[0]     = glyph_left;
-        obj->coord_topleft[1]     = glyph_top;
-        obj->coord_bottomright[0] = glyph_right;
-        obj->coord_bottomright[1] = glyph_bottom;
-        obj->tex_topleft          = tex_l | (tex_t << 16);
-        obj->tex_bottomright      = tex_r | (tex_b << 16);
-        // obj->tex_topleft     = tex_t | (tex_l << 16);
-        // obj->tex_bottomright = tex_b | (tex_r << 16);
-        obj->colour = colour;
+        xvg_text_t* obj     = xvg->text_buffer + xvg->text_buffer_len;
+        obj->coord_topleft2 = _xvg_pack_xy_coord(pen_x + rect->bearing_x, pen_y - rect->bearing_y);
+        obj->atlas_coords   = (xvecu){.r = rect->x, .g = rect->y, .b = rect->w, .a = rect->h}.u32;
+        obj->colour         = colour;
 
         xvg->text_buffer_len++;
     }
@@ -1059,7 +1037,7 @@ XVGTextLayoutRow* xvg__startRow(XVG* xvg, XVGTextLayout* layout)
         XVGTextLayoutRow* next_rows  = linked_arena_alloc(xvg->arena, sizeof(*next_rows) * layout->cap_rows);
         memcpy(next_rows, rows, sizeof(*next_rows) * layout->num_rows);
 
-        xvg_LayoutSetRows(layout, next_rows);
+        xvg_layout_set_rows(layout, next_rows);
         rows = next_rows;
     }
 
@@ -1116,8 +1094,8 @@ const XVGTextLayout* xvg_create_text_layout(
         layout->cap_rows = 8;
     XVGTextLayoutRow* rows   = linked_arena_alloc_clear(xvg->arena, sizeof(*rows) * layout->cap_rows);
     XVGGlyphLayout*   glyphs = linked_arena_alloc(xvg->arena, sizeof(*glyphs) * layout->cap_glyphs);
-    xvg_LayoutSetRows(layout, rows);
-    xvg_LayoutSetGlyphs(layout, glyphs);
+    xvg_layout_set_rows(layout, rows);
+    xvg_layout_set_glyphs(layout, glyphs);
 
     XVGFontSlot* sl = _xvg_get_current_font_slot(xvg);
     if (!sl->ft_face)
