@@ -1,7 +1,10 @@
 #ifndef XVG_H
 #define XVG_H
+
 #include "sokol_gfx.h"
 #include "xvg_shaders.glsl.h"
+#include <linked_arena.h>
+#include <stb_rect_pack.h>
 #include <xhl/debug.h>
 #include <xhl/maths.h>
 #include <xhl/vector.h>
@@ -32,6 +35,14 @@ extern "C" {
 #define XVG_LABEL(...) 0
 #endif
 
+#if !defined(XVG_TEXT_SINGLECHANNEL) || !defined(XVG_TEXT_MULTICHANNEL)
+#ifdef __APPLE__
+#define XVG_TEXT_SINGLECHANNEL
+#else
+#define XVG_TEXT_MULTICHANNEL
+#endif
+#endif // XVG_TEXT_SINGLECHANNEL || XVG_TEXT_MULTICHANNEL
+
 typedef enum XVGShapeType
 {
     XVG_SHAPE_RECTANGLE, // With sharp corners
@@ -56,8 +67,87 @@ typedef enum XVGColourType
     XVG_COLOUR_BOX_GRADEINT,
 } XVGColourType;
 
+typedef struct XVGFontSlot
+{
+    void*  kbtr_font_ptr;
+    void*  data;
+    size_t data_size;
+    int    owned;
+} XVGFontSlot;
+
+// Used to identify a unique glyph.
+// TODO: support multiple fonts
+typedef union XVGatlasRectHeader
+{
+    struct
+    {
+        uint32_t glyph_index;
+        // TODO: this could probably be packed into an integer. To support sizes like 12.25, multiply & divide by 4
+        // This could make room for font ids in the header
+        float font_size;
+    };
+    uint64_t data;
+} XVGatlasRectHeader;
+
+typedef struct XVGAtlasRect
+{
+    union XVGatlasRectHeader header;
+
+    uint8_t x, y, w, h;
+
+    int16_t advance_x;
+    int16_t advance_y;
+
+    int8_t bearing_x;
+    int8_t bearing_y;
+
+    sg_view img_view;
+} XVGAtlasRect;
+
+typedef struct XVGAtlas
+{
+    sg_view img_view;
+    bool    dirty;
+    bool    full;
+} XVGAtlas;
+
 typedef struct XVG
 {
+    struct FT_LibraryRec_* ft_lib;
+    struct FT_FaceRec_*    ft_face;
+    int                    space_advance;
+
+#ifndef XVG_MAX_FONT_SLOTS
+#define XVG_MAX_FONT_SLOTS 4
+#endif // XVG_MAX_FONTS
+
+    // NOTE: integer IDs for fonts are handed to the user that represent idx+1
+    // This leaves 0 and <0 as invalid ids
+    XVGFontSlot fonts[XVG_MAX_FONT_SLOTS];
+
+    XVGAtlas*     glyph_atlases;
+    XVGAtlasRect* rects;
+
+    struct
+    {
+        int            idx;
+        stbrp_context  ctx;
+        stbrp_node*    nodes;
+        unsigned char* img_data;
+    } current_atlas;
+
+    // Text pipeline
+    sg_pipeline text_pip;
+    sg_buffer   text_sbo;
+    sg_view     text_sbv;
+    sg_sampler  text_smp;
+
+#ifndef XVG_MAX_GLYPHS
+#define XVG_MAX_GLYPHS 1024
+#endif
+    size_t     text_buffer_len;
+    xvg_text_t text_buffer[XVG_MAX_GLYPHS];
+
     struct
     {
         sg_pipeline pip;
@@ -407,6 +497,13 @@ void xvg_draw_line_plot(
     float        stroke_width,
     uint32_t     colour);
 
+// 'font_filepath' is expected to be UTF8
+// Windows paths are expected to use backlashes ('\'), but forward probably wortk fine
+// This library takes ownership of the memory and frees it
+int xvg_add_font_from_path(XVG* xvg, const char* font_filepath);
+// Pass a buffer
+int xvg_add_font_from_memory(XVG* xvg, const void* font_data, size_t font_datalen);
+
 #ifdef __cplusplus
 }
 #endif
@@ -416,6 +513,12 @@ void xvg_draw_line_plot(
 #ifdef XVG_IMPL
 #undef XVG_IMPL
 #include <string.h>
+
+#if defined(XVG_TEXT_SINGLECHANNEL) || defined(XVG_TEXT_MULTICHANNEL)
+#include <ft2build.h>
+#include FT_FREETYPE_H
+#include FT_ADVANCES_H
+#endif
 
 void xvg_draw_line_plot(
     XVG*         xvg,
@@ -467,57 +570,67 @@ void xvg_draw_line_plot(
 
 void xvg_init(XVG* xvg)
 {
-    static const sg_color_target_state BLEND_DEFAULT = {
-        .write_mask = SG_COLORMASK_RGBA,
-        .blend      = {
-                 .enabled          = true,
-                 .src_factor_rgb   = SG_BLENDFACTOR_SRC_ALPHA,
-                 .src_factor_alpha = SG_BLENDFACTOR_ONE,
-                 .dst_factor_rgb   = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
-                 .dst_factor_alpha = SG_BLENDFACTOR_ONE,
-        }};
+    // Font stuff
+    {
+        int err = FT_Init_FreeType(&xvg->ft_lib);
+        xassert(!err);
 
-    xvg->shapes.pip = sg_make_pipeline(&(sg_pipeline_desc){
-        .shader    = sg_make_shader(_xvg_shapes_shader_desc(sg_query_backend())),
-        .colors[0] = BLEND_DEFAULT,
-        .label     = XVG_LABEL("xvg-shapes-pipeline")});
+        FT_Fixed advance = 0;
+        FT_Get_Advance(xvg->ft_face, 32, FT_LOAD_NO_SCALE, &advance);
+        xvg->space_advance = advance;
+    }
 
-    xvg->shapes.sbo = sg_make_buffer(&(sg_buffer_desc){
-        .usage.storage_buffer = true,
-        .usage.stream_update  = true,
-        .size                 = sizeof(xvg->shapes_buffer),
-        .label                = XVG_LABEL("xvg-shapes"),
-    });
-    xvg->shapes.sbv = sg_make_view(&(sg_view_desc){
-        .storage_buffer = xvg->shapes.sbo,
-    });
+    // Shader stuff
+    {
+        static const sg_color_target_state BLEND_DEFAULT = {
+            .write_mask = SG_COLORMASK_RGBA,
+            .blend      = {
+                     .enabled          = true,
+                     .src_factor_rgb   = SG_BLENDFACTOR_SRC_ALPHA,
+                     .src_factor_alpha = SG_BLENDFACTOR_ONE,
+                     .dst_factor_rgb   = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
+                     .dst_factor_alpha = SG_BLENDFACTOR_ONE,
+            }};
 
-    xvg->lines.pip = sg_make_pipeline(&(sg_pipeline_desc){
-        .shader    = sg_make_shader(_xvg_lines_shader_desc(sg_query_backend())),
-        .colors[0] = BLEND_DEFAULT,
-        .label     = XVG_LABEL("xvg-line-pipeline")});
+        xvg->shapes.pip = sg_make_pipeline(&(sg_pipeline_desc){
+            .shader    = sg_make_shader(_xvg_shapes_shader_desc(sg_query_backend())),
+            .colors[0] = BLEND_DEFAULT,
+            .label     = XVG_LABEL("xvg-shapes-pipeline")});
 
-    xvg->lines.line_sbo = sg_make_buffer(&(sg_buffer_desc){
-        .usage.storage_buffer = true,
-        .usage.stream_update  = true,
-        .size                 = sizeof(xvg->line_buffer),
-        .label                = XVG_LABEL("xvg-line-buffer"),
-    });
-    xvg->lines.line_sbv = sg_make_view(&(sg_view_desc){.storage_buffer = xvg->lines.line_sbo});
+        xvg->shapes.sbo = sg_make_buffer(&(sg_buffer_desc){
+            .usage.storage_buffer = true,
+            .usage.stream_update  = true,
+            .size                 = sizeof(xvg->shapes_buffer),
+            .label                = XVG_LABEL("xvg-shapes"),
+        });
+        xvg->shapes.sbv = sg_make_view(&(sg_view_desc){
+            .storage_buffer = xvg->shapes.sbo,
+        });
 
-    xvg->lines.tile_sbo = sg_make_buffer(&(sg_buffer_desc){
-        .usage.storage_buffer = true,
-        .usage.stream_update  = true,
-        .size                 = sizeof(xvg->tile_buffer),
-        .label                = XVG_LABEL("xvg-tile-buffer"),
-    });
-    xvg->lines.tile_sbv = sg_make_view(&(sg_view_desc){.storage_buffer = xvg->lines.tile_sbo});
+        xvg->lines.pip = sg_make_pipeline(&(sg_pipeline_desc){
+            .shader    = sg_make_shader(_xvg_lines_shader_desc(sg_query_backend())),
+            .colors[0] = BLEND_DEFAULT,
+            .label     = XVG_LABEL("xvg-line-pipeline")});
+
+        xvg->lines.line_sbo = sg_make_buffer(&(sg_buffer_desc){
+            .usage.storage_buffer = true,
+            .usage.stream_update  = true,
+            .size                 = sizeof(xvg->line_buffer),
+            .label                = XVG_LABEL("xvg-line-buffer"),
+        });
+        xvg->lines.line_sbv = sg_make_view(&(sg_view_desc){.storage_buffer = xvg->lines.line_sbo});
+
+        xvg->lines.tile_sbo = sg_make_buffer(&(sg_buffer_desc){
+            .usage.storage_buffer = true,
+            .usage.stream_update  = true,
+            .size                 = sizeof(xvg->tile_buffer),
+            .label                = XVG_LABEL("xvg-tile-buffer"),
+        });
+        xvg->lines.tile_sbv = sg_make_view(&(sg_view_desc){.storage_buffer = xvg->lines.tile_sbo});
+    }
 }
 
-void xvg_deinit(XVG*)
-{
-    // :)
-}
+void xvg_deinit(XVG* xvg) { FT_Done_FreeType(xvg->ft_lib); }
 
 void xvg_begin_frame(XVG* xvg)
 {

@@ -575,3 +575,110 @@ void main()
 @end
 
 @program _xvg_lines vs_xvg_lines fs_xvg_lines
+
+// ████████╗███████╗██╗  ██╗████████╗
+// ╚══██╔══╝██╔════╝╚██╗██╔╝╚══██╔══╝
+//    ██║   █████╗   ╚███╔╝    ██║
+//    ██║   ██╔══╝   ██╔██╗    ██║
+//    ██║   ███████╗██╔╝ ██╗   ██║
+//    ╚═╝   ╚══════╝╚═╝  ╚═╝   ╚═╝
+
+@vs vs_xvg_text
+
+struct xvg_text
+{
+    // NOTE: coord_topleft coords could be compressed to uint16. To support signedness, apply +32767 delta building the SBO, then subtract -32767 here
+    // NOTE: tex atlas coords are 0-255, could be compressed to Unorm4x8
+    // NOTE: coord_bottomright is redundant, could be calculated using topleft + atlas_coords.zw * 255
+
+    vec2 coord_topleft;
+    vec2 coord_bottomright;
+    uint tex_topleft;
+    uint tex_bottomright;
+};
+
+layout(binding=0) readonly buffer vs_xvg_text_buffer {
+    xvg_text vtx[];
+};
+
+layout(binding=0) uniform vs_xvg_text_uniforms {
+    vec2 u_xy_offset;
+    vec2 u_view_size;
+    int  u_sbo_offset;
+};
+
+out vec2 texcoord;
+
+void main() {
+    uint v_idx = gl_VertexIndex / 6u;
+    uint i_idx = gl_VertexIndex - v_idx * 6;
+
+    xvg_text obj = vtx[v_idx + u_sbo_offset];
+
+    //  0.5f,  0.5f,
+    // -0.5f, -0.5f,
+    //  0.5f, -0.5f,
+    // -0.5f,  0.5f,
+    // 0, 1, 2,
+    // 1, 2, 3,
+
+    // Is odd
+    bool is_right = (gl_VertexIndex & 1) == 1;
+    bool is_bottom = i_idx >= 2 && i_idx <= 4;
+
+    vec2 pos = vec2(
+        is_right  ? obj.coord_bottomright.x : obj.coord_topleft.x,
+        is_bottom ? obj.coord_bottomright.y : obj.coord_topleft.y
+    );
+    pos = (pos - u_xy_offset) * 2 / u_view_size - vec2(1);
+
+	gl_Position = vec4(pos.x, -pos.y, 0, 1);
+
+    vec2 tex_topleft = unpackUnorm2x16(obj.tex_topleft);
+    vec2 tex_bottomright = unpackUnorm2x16(obj.tex_bottomright);
+    texcoord = vec2(
+        is_right  ? tex_bottomright.x : tex_topleft.x,
+        is_bottom ? tex_bottomright.y : tex_topleft.y
+    );
+}
+@end
+
+@fs fs_xvg_text_singlechannel
+layout(binding=1) uniform texture2D text_tex;
+layout(binding=0) uniform sampler text_smp;
+
+layout(binding=1) uniform fs_text_singlechannel_uniforms {
+    vec4 u_colour;
+};
+
+in vec2 texcoord;
+out vec4 frag_colour;
+
+void main() {
+    float alpha = texture(sampler2D(text_tex, text_smp), texcoord).r;
+    frag_colour = vec4(u_colour.rgb, u_colour.a * alpha);
+}
+@end
+
+@fs fs_xvg_text_multichannel
+layout(binding=1) uniform texture2D text_tex;
+layout(binding=0) uniform sampler text_smp;
+
+in vec2 texcoord;
+layout(location=0, index=0) out vec4 frag_colour;
+layout(location=0, index=1) out vec4 blend_weights;
+
+layout(binding=1) uniform fs_text_multichannel_uniforms {
+    vec4 u_colour;
+};
+
+void main() {
+    vec3 pixel_coverages = texture(sampler2D(text_tex, text_smp), texcoord).rgb;
+
+    frag_colour = u_colour * vec4(pixel_coverages, 1);
+	blend_weights = vec4(u_colour.a * pixel_coverages, u_colour.a);
+}
+@end
+
+@program _xvg_text_singlechannel vs_xvg_text fs_xvg_text_singlechannel
+@program _xvg_text_multichannel  vs_xvg_text fs_xvg_text_multichannel
