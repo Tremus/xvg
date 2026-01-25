@@ -598,7 +598,6 @@ layout(binding=0) readonly buffer vs_xvg_text_buffer {
 };
 
 layout(binding=0) uniform vs_xvg_text_uniforms {
-    vec2 u_xy_offset;
     vec2 u_view_size;
     int  u_sbo_offset;
 };
@@ -630,13 +629,13 @@ void main() {
         is_bottom ? (atlas_coords.y + atlas_coords.w) : atlas_coords.y
     );
 
-    vec2 topleft = unpackUnorm2x16(obj.coord_topleft2) * vec2(65535) - vec2(32767);
+    vec2 topleft = unpackUnorm2x16(obj.topleft) * vec2(65535) - vec2(32767);
 
     vec2 pos = vec2(
         is_right  ? (topleft.x + glyph_size.x) : topleft.x,
         is_bottom ? (topleft.y + glyph_size.y) : topleft.y
     );
-    pos = (pos - u_xy_offset) * 2 / u_view_size - vec2(1);
+    pos = (pos + pos) / u_view_size - vec2(1);
 
 	gl_Position = vec4(pos.x, -pos.y, 0, 1);
 

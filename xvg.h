@@ -9,10 +9,14 @@
 #include <xhl/maths.h>
 #include <xhl/vector.h>
 
+/*
 // TODO: combine line tiles with shapes shader
 // TODO: increase max stroke width for line plots
 // TODO: rounded rectangle scissoring for line plots. Will require sdRoundBox()
 // TODO: support fallback fonts for missing glyphs
+// TODO: support intelligent batching of text when using multiple atlases
+// TODO: make a xvg_make_gradient() function to help reduce the number of draw_rect_functions()
+*/
 
 // #ifdef __cplusplus
 // extern "C" {
@@ -272,19 +276,19 @@ typedef struct XVG
     } text;
 
 #ifndef XVG_SHAPES_CAPACITY
-#define XVG_SHAPES_CAPACITY 2048
+#define XVG_SHAPES_CAPACITY 1024
 #endif
     size_t      shapes_buffer_len;
     xvg_shape_t shapes_buffer[XVG_SHAPES_CAPACITY];
 
 #ifndef XVG_LINE_BUFFER_CAPACITY
-#define XVG_LINE_BUFFER_CAPACITY 16384
+#define XVG_LINE_BUFFER_CAPACITY 8192
 #endif
     size_t             line_buffer_len;
     xvg_line_segment_t line_buffer[XVG_LINE_BUFFER_CAPACITY];
 
 #ifndef XVG_LINE_TILE_CAPACITY
-#define XVG_LINE_TILE_CAPACITY 128
+#define XVG_LINE_TILE_CAPACITY 32
 #endif
     size_t          tile_buffer_len;
     xvg_line_tile_t tile_buffer[XVG_LINE_TILE_CAPACITY];
@@ -302,104 +306,9 @@ void xvg_deinit(XVG*);
 void xvg_begin_frame(XVG*);
 void xvg_end_frame(XVG* xvg, int window_width, int window_height);
 
-// These methods should be considered 'private' and are likely to change in future, but in case you need it, here they
-// are.
-
-static void _xvg_add_shape(XVG* xvg, const xvg_shape_t* obj)
-{
-    if (xvg->shapes_buffer_len < XVG_ARRLEN(xvg->shapes_buffer))
-        xvg->shapes_buffer[xvg->shapes_buffer_len++] = *obj;
-}
-
-static uint32_t _xvg_compress_sdf_data(unsigned sdf_type, unsigned grad_type, float feather, float stroke_width)
-{
-    xassert(stroke_width >= 0 && stroke_width < 16);
-    xvecu compressed = {
-        .r = sdf_type,
-        .g = grad_type,
-        .b = (uint8_t)(xm_minf(255, feather * 255)),
-        .a = (uint8_t)(xm_minf(255, stroke_width * 16)),
-    };
-    return compressed.u32;
-}
-
-static uint32_t _xvg_compress_border_radius(float tr, float br, float tl, float bl)
-{
-    xvecu compressed = {
-        .r = tr,
-        .g = br,
-        .b = tl,
-        .a = bl,
-    };
-    return compressed.u32;
-}
-
-static uint32_t _xvg_packUnorm2x16(float low_f, float high_f)
-{
-    uint16_t low_u16  = (uint16_t)(xm_clampf(low_f, 0.0f, 1.0f) * 65535.0f);
-    uint16_t high_u16 = (uint16_t)(xm_clampf(high_f, 0.0f, 1.0f) * 65535.0f);
-    return low_u16 | (high_u16 << 16);
-}
-
-static uint32_t _xvg_packUnorm4x8(float x_f, float y_f, float z_f, float w_f)
-{
-    xvecu compressed = {
-        .r = (uint8_t)(xm_clampf(x_f, 0.0f, 1.0f) * 255.0f),
-        .g = (uint8_t)(xm_clampf(y_f, 0.0f, 1.0f) * 255.0f),
-        .b = (uint8_t)(xm_clampf(z_f, 0.0f, 1.0f) * 255.0f),
-        .a = (uint8_t)(xm_clampf(w_f, 0.0f, 1.0f) * 255.0f),
-    };
-    return compressed.u32;
-}
-
-static uint32_t _xvg_compress_arc_rotate_and_range(float rotate_radians, float range_radians)
-{
-    // remap [-PI, PI] to [0-1]
-    float rotate_turns = rotate_radians * XM_1_TAUf;
-    float range_turns  = range_radians * XM_1_TAUf;
-    float rotate_norm  = rotate_turns - floorf(rotate_turns);
-    float range_norm   = range_turns - floorf(range_turns);
-    xassert(rotate_norm >= 0 && rotate_norm <= 1);
-    xassert(range_norm >= 0 && range_norm <= 1);
-    return _xvg_packUnorm2x16(rotate_norm, range_norm);
-}
-
-static uint32_t _xvg_pack_xy_coord(int x, int y)
-{
-    union
-    {
-        struct
-        {
-            int16_t low;
-            int16_t high;
-        };
-        uint32_t u32;
-    } v;
-    v.low   = x;
-    v.high  = y;
-    v.low  += 32767;
-    v.high += 32767;
-    return v.u32;
-}
-
 // Shapes
 
-// If 'stroke_width' is 0, the circle will be filled
-static void xvg_draw_circle(XVG* xvg, float cx, float cy, float radius_px, float stroke_width, uint32_t colour)
-{
-    XVGShapeType shape_type = stroke_width > 0 ? XVG_SHAPE_CIRCLE_STROKE : XVG_SHAPE_CIRCLE_FILL;
-    float        feather    = 2.0f / radius_px;
-    _xvg_add_shape(
-        xvg,
-        &(xvg_shape_t){
-            .topleft     = {cx - radius_px, cy - radius_px},
-            .bottomright = {cx + radius_px, cy + radius_px},
-            .colour1     = colour,
-            .sdf_data    = _xvg_compress_sdf_data(shape_type, 0, feather, stroke_width),
-        });
-}
-
-static void xvg_draw_rounded_rectangle(
+void xvg_draw_rounded_rectangle(
     XVG*     xvg,
     float    x,
     float    y,
@@ -407,24 +316,9 @@ static void xvg_draw_rounded_rectangle(
     float    h,
     float    border_radius,
     float    stroke_width,
-    uint32_t colour)
-{
-    XVGShapeType shape_type = stroke_width > 0 ? XVG_SHAPE_ROUNDED_RECTANGLE_STROKE : XVG_SHAPE_ROUNDED_RECTANGLE_FILL;
-    float        feather    = 4.0f / xm_minf(w, h);
-    _xvg_add_shape(
-        xvg,
-        &(xvg_shape_t){
-            .topleft     = {x, y},
-            .bottomright = {x + w, y + h},
-            .sdf_data    = _xvg_compress_sdf_data(shape_type, 0, feather, stroke_width),
+    uint32_t colour);
 
-            .borderradius_arcpie =
-                _xvg_compress_border_radius(border_radius, border_radius, border_radius, border_radius),
-            .colour1 = colour,
-        });
-}
-
-static void xvg_draw_rounded_rectangle_fill_linear(
+void xvg_draw_rounded_rectangle_fill_linear(
     XVG*     xvg,
     float    x,
     float    y,
@@ -436,27 +330,9 @@ static void xvg_draw_rounded_rectangle_fill_linear(
     float    x_stop_1,
     float    y_stop_1,
     float    x_stop_2,
-    float    y_stop_2)
-{
-    float feather = 4.0f / xm_minf(w, h);
-    _xvg_add_shape(
-        xvg,
-        &(xvg_shape_t){
-            .topleft     = {x, y},
-            .bottomright = {x + w, y + h},
-            .sdf_data =
-                _xvg_compress_sdf_data(XVG_SHAPE_ROUNDED_RECTANGLE_FILL, XVG_COLOUR_LINEAR_GRADEINT, feather, 0),
-            .borderradius_arcpie =
-                _xvg_compress_border_radius(border_radius, border_radius, border_radius, border_radius),
+    float    y_stop_2);
 
-            .colour1    = col_stop_1,
-            .colour2    = col_stop_2,
-            .gradient_a = {x_stop_1, y_stop_1},
-            .gradient_b = {x_stop_2, y_stop_2},
-        });
-}
-
-static void xvg_draw_rounded_rectangle_fill_radial(
+void xvg_draw_rounded_rectangle_fill_radial(
     XVG*     xvg,
     float    x,
     float    y,
@@ -468,26 +344,9 @@ static void xvg_draw_rounded_rectangle_fill_radial(
     float    cx_stop_1,
     float    cy_stop_1,
     float    x_radius_stop_2,
-    float    y_radius_stop_2)
-{
-    float feather = 4.0f / xm_minf(w, h);
-    _xvg_add_shape(
-        xvg,
-        &(xvg_shape_t){
-            .topleft     = {x, y},
-            .bottomright = {x + w, y + h},
-            .sdf_data =
-                _xvg_compress_sdf_data(XVG_SHAPE_ROUNDED_RECTANGLE_FILL, XVG_COLOUR_RADIAL_GRADEINT, feather, 0),
-            .borderradius_arcpie =
-                _xvg_compress_border_radius(border_radius, border_radius, border_radius, border_radius),
-            .colour1    = col_stop_1,
-            .colour2    = col_stop_2,
-            .gradient_a = {cx_stop_1, cy_stop_1},
-            .gradient_b = {x_radius_stop_2, y_radius_stop_2},
-        });
-}
+    float    y_radius_stop_2);
 
-static void xvg_draw_rounded_rectangle_fill_conic(
+void xvg_draw_rounded_rectangle_fill_conic(
     XVG*     xvg,
     float    x,
     float    y,
@@ -497,32 +356,9 @@ static void xvg_draw_rounded_rectangle_fill_conic(
     uint32_t col_stop_1,
     uint32_t col_stop_2,
     float    radians_stop_1,
-    float    radians_stop_2)
-{
-    float feather = 4.0f / xm_minf(w, h);
+    float    radians_stop_2);
 
-    float range = radians_stop_2 - radians_stop_1;
-    float a     = XM_PIf + radians_stop_1;
-    float b     = range * XM_1_TAUf;
-
-    _xvg_add_shape(
-        xvg,
-        &(xvg_shape_t){
-            .topleft     = {x, y},
-            .bottomright = {x + w, y + h},
-            .sdf_data = _xvg_compress_sdf_data(XVG_SHAPE_ROUNDED_RECTANGLE_FILL, XVG_COLOUR_CONIC_GRADEINT, feather, 0),
-            .borderradius_arcpie =
-                _xvg_compress_border_radius(border_radius, border_radius, border_radius, border_radius),
-
-            .colour1 = col_stop_1,
-            .colour2 = col_stop_2,
-
-            .gradient_a = {a, a},
-            .gradient_b = {b, b},
-        });
-}
-
-static void xvg_draw_rounded_rectangle_fill_inner_shadow(
+void xvg_draw_rounded_rectangle_fill_inner_shadow(
     XVG*     xvg,
     float    x,
     float    y,
@@ -533,27 +369,9 @@ static void xvg_draw_rounded_rectangle_fill_inner_shadow(
     uint32_t col_stop_inner,
     float    x_translate,
     float    y_translate,
-    float    blur_radius)
-{
-    float feather = 4.0f / xm_minf(w, h);
-    _xvg_add_shape(
-        xvg,
-        &(xvg_shape_t){
-            .topleft     = {x, y},
-            .bottomright = {x + w, y + h},
+    float    blur_radius);
 
-            .sdf_data = _xvg_compress_sdf_data(XVG_SHAPE_ROUNDED_RECTANGLE_FILL, XVG_COLOUR_BOX_GRADEINT, feather, 0),
-            .borderradius_arcpie =
-                _xvg_compress_border_radius(border_radius, border_radius, border_radius, border_radius),
-
-            .colour1    = col_stop_outer,
-            .colour2    = col_stop_inner,
-            .gradient_a = {x_translate, y_translate},
-            .gradient_b = {blur_radius, blur_radius},
-        });
-}
-
-static void xvg_draw_triangle(
+void xvg_draw_triangle(
     XVG*     xvg,
     float    x,
     float    y,
@@ -561,22 +379,9 @@ static void xvg_draw_triangle(
     float    h,
     float    rotate_radians,
     float    stroke_width,
-    uint32_t colour)
-{
-    XVGShapeType shape_type = stroke_width > 0 ? XVG_SHAPE_TRIANGLE_STROKE : XVG_SHAPE_TRIANGLE_FILL;
-    float        feather    = 4.0f / xm_minf(w, h);
-    _xvg_add_shape(
-        xvg,
-        &(xvg_shape_t){
-            .topleft             = {x, y},
-            .bottomright         = {x + w, y + h},
-            .sdf_data            = _xvg_compress_sdf_data(shape_type, 0, feather, stroke_width),
-            .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(rotate_radians, 0),
-            .colour1             = colour,
-        });
-}
+    uint32_t colour);
 
-static void xvg_draw_pie(
+void xvg_draw_pie(
     XVG*     xvg,
     float    cx,
     float    cy,
@@ -584,24 +389,9 @@ static void xvg_draw_pie(
     float    start_radians,
     float    end_radians,
     float    stroke_width,
-    uint32_t colour)
-{
-    XVGShapeType shape_type   = stroke_width > 0 ? XVG_SHAPE_PIE_STROKE : XVG_SHAPE_PIE_FILL;
-    float        feather      = 2.0f / radius_px;
-    float        angle_range  = end_radians - start_radians;
-    float        angle_rotate = (end_radians + start_radians);
-    _xvg_add_shape(
-        xvg,
-        &(xvg_shape_t){
-            .topleft             = {cx - radius_px, cy - radius_px},
-            .bottomright         = {cx + radius_px, cy + radius_px},
-            .sdf_data            = _xvg_compress_sdf_data(shape_type, 0, feather, stroke_width),
-            .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(angle_rotate * 0.5f, angle_range * 0.5f),
-            .colour1             = colour,
-        });
-}
+    uint32_t colour);
 
-static void xvg_draw_arc(
+void xvg_draw_arc(
     XVG*     xvg,
     float    cx,
     float    cy,
@@ -610,25 +400,7 @@ static void xvg_draw_arc(
     float    end_radians,
     float    stroke_width,
     bool     butt,
-    uint32_t colour)
-{
-    float feather      = 2.0f / radius_px;
-    float angle_range  = end_radians - start_radians;
-    float angle_rotate = (end_radians + start_radians);
-    _xvg_add_shape(
-        xvg,
-        &(xvg_shape_t){
-            .topleft     = {cx - radius_px, cy - radius_px},
-            .bottomright = {cx + radius_px, cy + radius_px},
-            .sdf_data    = _xvg_compress_sdf_data(
-                butt ? XVG_SHAPE_ARC_BUTT_STROKE : XVG_SHAPE_ARC_ROUND_STROKE,
-                0,
-                feather,
-                stroke_width),
-            .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(angle_rotate * 0.5f, angle_range * 0.5f),
-            .colour1             = colour,
-        });
-}
+    uint32_t colour);
 
 // 'data' is expected to be an array of 'width' length
 // 'data' is expected to contain normalised values where 0 == (y + height), and 1 == y
@@ -693,6 +465,336 @@ void xvg_draw_text(
 #define XVG_REALLOC(ptr, sz) realloc(ptr, sz)
 #define XVG_FREE(ptr)        free(ptr)
 #endif
+
+uint32_t _xvg_compress_sdf_data(unsigned sdf_type, unsigned grad_type, float feather, float stroke_width)
+{
+    xassert(stroke_width >= 0 && stroke_width < 16);
+    xvecu compressed = {
+        .r = sdf_type,
+        .g = grad_type,
+        .b = (uint8_t)(xm_minf(255, feather * 255)),
+        .a = (uint8_t)(xm_minf(255, stroke_width * 16)),
+    };
+    return compressed.u32;
+}
+
+uint32_t _xvg_compress_border_radius(float tr, float br, float tl, float bl)
+{
+    xvecu compressed = {
+        .r = tr,
+        .g = br,
+        .b = tl,
+        .a = bl,
+    };
+    return compressed.u32;
+}
+
+uint32_t _xvg_packUnorm2x16(float low_f, float high_f)
+{
+    uint16_t low_u16  = (uint16_t)(xm_clampf(low_f, 0.0f, 1.0f) * 65535.0f);
+    uint16_t high_u16 = (uint16_t)(xm_clampf(high_f, 0.0f, 1.0f) * 65535.0f);
+    return low_u16 | (high_u16 << 16);
+}
+
+uint32_t _xvg_packUnorm4x8(float x_f, float y_f, float z_f, float w_f)
+{
+    xvecu compressed = {
+        .r = (uint8_t)(xm_clampf(x_f, 0.0f, 1.0f) * 255.0f),
+        .g = (uint8_t)(xm_clampf(y_f, 0.0f, 1.0f) * 255.0f),
+        .b = (uint8_t)(xm_clampf(z_f, 0.0f, 1.0f) * 255.0f),
+        .a = (uint8_t)(xm_clampf(w_f, 0.0f, 1.0f) * 255.0f),
+    };
+    return compressed.u32;
+}
+
+uint32_t _xvg_compress_arc_rotate_and_range(float rotate_radians, float range_radians)
+{
+    // remap [-PI, PI] to [0-1]
+    float rotate_turns = rotate_radians * XM_1_TAUf;
+    float range_turns  = range_radians * XM_1_TAUf;
+    float rotate_norm  = rotate_turns - floorf(rotate_turns);
+    float range_norm   = range_turns - floorf(range_turns);
+    xassert(rotate_norm >= 0 && rotate_norm <= 1);
+    xassert(range_norm >= 0 && range_norm <= 1);
+    return _xvg_packUnorm2x16(rotate_norm, range_norm);
+}
+
+uint32_t _xvg_pack_xy_coord(int x, int y)
+{
+    union
+    {
+        struct
+        {
+            int16_t low;
+            int16_t high;
+        };
+        uint32_t u32;
+    } v;
+    v.low   = x;
+    v.high  = y;
+    v.low  += 32767;
+    v.high += 32767;
+    return v.u32;
+}
+
+// ███████╗██╗  ██╗ █████╗ ██████╗ ███████╗███████╗
+// ██╔════╝██║  ██║██╔══██╗██╔══██╗██╔════╝██╔════╝
+// ███████╗███████║███████║██████╔╝█████╗  ███████╗
+// ╚════██║██╔══██║██╔══██║██╔═══╝ ██╔══╝  ╚════██║
+// ███████║██║  ██║██║  ██║██║     ███████╗███████║
+// ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚══════╝╚══════╝
+
+void _xvg_add_shape(XVG* xvg, const xvg_shape_t* obj)
+{
+    if (xvg->shapes_buffer_len < XVG_ARRLEN(xvg->shapes_buffer))
+        xvg->shapes_buffer[xvg->shapes_buffer_len++] = *obj;
+}
+
+// If 'stroke_width' is 0, the circle will be filled
+void xvg_draw_circle(XVG* xvg, float cx, float cy, float radius_px, float stroke_width, uint32_t colour)
+{
+    XVGShapeType shape_type = stroke_width > 0 ? XVG_SHAPE_CIRCLE_STROKE : XVG_SHAPE_CIRCLE_FILL;
+    float        feather    = 2.0f / radius_px;
+    _xvg_add_shape(
+        xvg,
+        &(xvg_shape_t){
+            .topleft     = {cx - radius_px, cy - radius_px},
+            .bottomright = {cx + radius_px, cy + radius_px},
+            .colour1     = colour,
+            .sdf_data    = _xvg_compress_sdf_data(shape_type, 0, feather, stroke_width),
+        });
+}
+
+void xvg_draw_rounded_rectangle(
+    XVG*     xvg,
+    float    x,
+    float    y,
+    float    w,
+    float    h,
+    float    border_radius,
+    float    stroke_width,
+    uint32_t colour)
+{
+    XVGShapeType shape_type = stroke_width > 0 ? XVG_SHAPE_ROUNDED_RECTANGLE_STROKE : XVG_SHAPE_ROUNDED_RECTANGLE_FILL;
+    float        feather    = 4.0f / xm_minf(w, h);
+    _xvg_add_shape(
+        xvg,
+        &(xvg_shape_t){
+            .topleft     = {x, y},
+            .bottomright = {x + w, y + h},
+            .sdf_data    = _xvg_compress_sdf_data(shape_type, 0, feather, stroke_width),
+
+            .borderradius_arcpie =
+                _xvg_compress_border_radius(border_radius, border_radius, border_radius, border_radius),
+            .colour1 = colour,
+        });
+}
+
+void xvg_draw_rounded_rectangle_fill_linear(
+    XVG*     xvg,
+    float    x,
+    float    y,
+    float    w,
+    float    h,
+    float    border_radius,
+    uint32_t col_stop_1,
+    uint32_t col_stop_2,
+    float    x_stop_1,
+    float    y_stop_1,
+    float    x_stop_2,
+    float    y_stop_2)
+{
+    float feather = 4.0f / xm_minf(w, h);
+    _xvg_add_shape(
+        xvg,
+        &(xvg_shape_t){
+            .topleft     = {x, y},
+            .bottomright = {x + w, y + h},
+            .sdf_data =
+                _xvg_compress_sdf_data(XVG_SHAPE_ROUNDED_RECTANGLE_FILL, XVG_COLOUR_LINEAR_GRADEINT, feather, 0),
+            .borderradius_arcpie =
+                _xvg_compress_border_radius(border_radius, border_radius, border_radius, border_radius),
+
+            .colour1    = col_stop_1,
+            .colour2    = col_stop_2,
+            .gradient_a = {x_stop_1, y_stop_1},
+            .gradient_b = {x_stop_2, y_stop_2},
+        });
+}
+
+void xvg_draw_rounded_rectangle_fill_radial(
+    XVG*     xvg,
+    float    x,
+    float    y,
+    float    w,
+    float    h,
+    float    border_radius,
+    uint32_t col_stop_1,
+    uint32_t col_stop_2,
+    float    cx_stop_1,
+    float    cy_stop_1,
+    float    x_radius_stop_2,
+    float    y_radius_stop_2)
+{
+    float feather = 4.0f / xm_minf(w, h);
+    _xvg_add_shape(
+        xvg,
+        &(xvg_shape_t){
+            .topleft     = {x, y},
+            .bottomright = {x + w, y + h},
+            .sdf_data =
+                _xvg_compress_sdf_data(XVG_SHAPE_ROUNDED_RECTANGLE_FILL, XVG_COLOUR_RADIAL_GRADEINT, feather, 0),
+            .borderradius_arcpie =
+                _xvg_compress_border_radius(border_radius, border_radius, border_radius, border_radius),
+            .colour1    = col_stop_1,
+            .colour2    = col_stop_2,
+            .gradient_a = {cx_stop_1, cy_stop_1},
+            .gradient_b = {x_radius_stop_2, y_radius_stop_2},
+        });
+}
+
+void xvg_draw_rounded_rectangle_fill_conic(
+    XVG*     xvg,
+    float    x,
+    float    y,
+    float    w,
+    float    h,
+    float    border_radius,
+    uint32_t col_stop_1,
+    uint32_t col_stop_2,
+    float    radians_stop_1,
+    float    radians_stop_2)
+{
+    float feather = 4.0f / xm_minf(w, h);
+
+    float range = radians_stop_2 - radians_stop_1;
+    float a     = XM_PIf + radians_stop_1;
+    float b     = range * XM_1_TAUf;
+
+    _xvg_add_shape(
+        xvg,
+        &(xvg_shape_t){
+            .topleft     = {x, y},
+            .bottomright = {x + w, y + h},
+            .sdf_data = _xvg_compress_sdf_data(XVG_SHAPE_ROUNDED_RECTANGLE_FILL, XVG_COLOUR_CONIC_GRADEINT, feather, 0),
+            .borderradius_arcpie =
+                _xvg_compress_border_radius(border_radius, border_radius, border_radius, border_radius),
+
+            .colour1 = col_stop_1,
+            .colour2 = col_stop_2,
+
+            .gradient_a = {a, a},
+            .gradient_b = {b, b},
+        });
+}
+
+void xvg_draw_rounded_rectangle_fill_inner_shadow(
+    XVG*     xvg,
+    float    x,
+    float    y,
+    float    w,
+    float    h,
+    float    border_radius,
+    uint32_t col_stop_outer,
+    uint32_t col_stop_inner,
+    float    x_translate,
+    float    y_translate,
+    float    blur_radius)
+{
+    float feather = 4.0f / xm_minf(w, h);
+    _xvg_add_shape(
+        xvg,
+        &(xvg_shape_t){
+            .topleft     = {x, y},
+            .bottomright = {x + w, y + h},
+
+            .sdf_data = _xvg_compress_sdf_data(XVG_SHAPE_ROUNDED_RECTANGLE_FILL, XVG_COLOUR_BOX_GRADEINT, feather, 0),
+            .borderradius_arcpie =
+                _xvg_compress_border_radius(border_radius, border_radius, border_radius, border_radius),
+
+            .colour1    = col_stop_outer,
+            .colour2    = col_stop_inner,
+            .gradient_a = {x_translate, y_translate},
+            .gradient_b = {blur_radius, blur_radius},
+        });
+}
+
+void xvg_draw_triangle(
+    XVG*     xvg,
+    float    x,
+    float    y,
+    float    w,
+    float    h,
+    float    rotate_radians,
+    float    stroke_width,
+    uint32_t colour)
+{
+    XVGShapeType shape_type = stroke_width > 0 ? XVG_SHAPE_TRIANGLE_STROKE : XVG_SHAPE_TRIANGLE_FILL;
+    float        feather    = 4.0f / xm_minf(w, h);
+    _xvg_add_shape(
+        xvg,
+        &(xvg_shape_t){
+            .topleft             = {x, y},
+            .bottomright         = {x + w, y + h},
+            .sdf_data            = _xvg_compress_sdf_data(shape_type, 0, feather, stroke_width),
+            .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(rotate_radians, 0),
+            .colour1             = colour,
+        });
+}
+
+void xvg_draw_pie(
+    XVG*     xvg,
+    float    cx,
+    float    cy,
+    float    radius_px,
+    float    start_radians,
+    float    end_radians,
+    float    stroke_width,
+    uint32_t colour)
+{
+    XVGShapeType shape_type   = stroke_width > 0 ? XVG_SHAPE_PIE_STROKE : XVG_SHAPE_PIE_FILL;
+    float        feather      = 2.0f / radius_px;
+    float        angle_range  = end_radians - start_radians;
+    float        angle_rotate = (end_radians + start_radians);
+    _xvg_add_shape(
+        xvg,
+        &(xvg_shape_t){
+            .topleft             = {cx - radius_px, cy - radius_px},
+            .bottomright         = {cx + radius_px, cy + radius_px},
+            .sdf_data            = _xvg_compress_sdf_data(shape_type, 0, feather, stroke_width),
+            .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(angle_rotate * 0.5f, angle_range * 0.5f),
+            .colour1             = colour,
+        });
+}
+
+void xvg_draw_arc(
+    XVG*     xvg,
+    float    cx,
+    float    cy,
+    float    radius_px,
+    float    start_radians,
+    float    end_radians,
+    float    stroke_width,
+    bool     butt,
+    uint32_t colour)
+{
+    float feather      = 2.0f / radius_px;
+    float angle_range  = end_radians - start_radians;
+    float angle_rotate = (end_radians + start_radians);
+    _xvg_add_shape(
+        xvg,
+        &(xvg_shape_t){
+            .topleft     = {cx - radius_px, cy - radius_px},
+            .bottomright = {cx + radius_px, cy + radius_px},
+            .sdf_data    = _xvg_compress_sdf_data(
+                butt ? XVG_SHAPE_ARC_BUTT_STROKE : XVG_SHAPE_ARC_ROUND_STROKE,
+                0,
+                feather,
+                stroke_width),
+            .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(angle_rotate * 0.5f, angle_range * 0.5f),
+            .colour1             = colour,
+        });
+}
 
 // ██╗     ██╗███╗   ██╗███████╗███████╗
 // ██║     ██║████╗  ██║██╔════╝██╔════╝
@@ -1016,10 +1118,10 @@ bool _xvg_push_glyph(XVG* xvg, int pen_x, int pen_y, const XVGAtlasRect* rect, u
     XVG_ASSERT(should_push);
     if (should_push)
     {
-        xvg_text_t* obj     = xvg->text_buffer + xvg->text_buffer_len;
-        obj->coord_topleft2 = _xvg_pack_xy_coord(pen_x + rect->bearing_x, pen_y - rect->bearing_y);
-        obj->atlas_coords   = (xvecu){.r = rect->x, .g = rect->y, .b = rect->w, .a = rect->h}.u32;
-        obj->colour         = colour;
+        xvg_text_t* obj   = xvg->text_buffer + xvg->text_buffer_len;
+        obj->topleft      = _xvg_pack_xy_coord(pen_x + rect->bearing_x, pen_y - rect->bearing_y);
+        obj->atlas_coords = (xvecu){.r = rect->x, .g = rect->y, .b = rect->w, .a = rect->h}.u32;
+        obj->colour       = colour;
 
         xvg->text_buffer_len++;
     }
