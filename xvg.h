@@ -12,6 +12,7 @@
 // TODO: combine line tiles with shapes shader
 // TODO: increase max stroke width for line plots
 // TODO: rounded rectangle scissoring for line plots. Will require sdRoundBox()
+// TODO: support fallback fonts for missing glyphs
 
 #ifdef __cplusplus
 extern "C" {
@@ -69,15 +70,19 @@ typedef enum XVGColourType
 
 typedef struct XVGFontSlot
 {
-    void*  kbtr_font_ptr;
+    void*               kbts_font_ptr;
+    struct FT_FaceRec_* ft_face;
+
     void*  data;
     size_t data_size;
-    int    owned;
+
+    int space_advance;
+    int owned;
 } XVGFontSlot;
 
 // Used to identify a unique glyph.
 // TODO: support multiple fonts
-typedef union XVGatlasRectHeader
+typedef union XVGAtlasRectHeader
 {
     struct
     {
@@ -87,11 +92,11 @@ typedef union XVGatlasRectHeader
         float font_size;
     };
     uint64_t data;
-} XVGatlasRectHeader;
+} XVGAtlasRectHeader;
 
 typedef struct XVGAtlasRect
 {
-    union XVGatlasRectHeader header;
+    union XVGAtlasRectHeader header;
 
     uint8_t x, y, w, h;
 
@@ -111,18 +116,21 @@ typedef struct XVGAtlas
     bool    full;
 } XVGAtlas;
 
+typedef struct XVGFont
+{
+    int id;
+} XVGFont;
+
 typedef struct XVG
 {
     struct FT_LibraryRec_* ft_lib;
-    struct FT_FaceRec_*    ft_face;
-    int                    space_advance;
 
 #ifndef XVG_MAX_FONT_SLOTS
 #define XVG_MAX_FONT_SLOTS 4
 #endif // XVG_MAX_FONTS
 
-    // NOTE: integer IDs for fonts are handed to the user that represent idx+1
-    // This leaves 0 and <0 as invalid ids
+    // Will default to the first font a user passes the library
+    int         current_font_idx;
     XVGFontSlot fonts[XVG_MAX_FONT_SLOTS];
 
     XVGAtlas*     glyph_atlases;
@@ -177,6 +185,9 @@ void xvg_deinit(XVG*);
 
 void xvg_begin_frame(XVG*);
 void xvg_end_frame(XVG* xvg, int window_width, int window_height);
+
+// These methods should be considered 'private' and are likely to change in future, but in case you need it, here they
+// are.
 
 static void _xvg_add_shape(XVG* xvg, const xvg_shape_t* obj)
 {
@@ -236,6 +247,8 @@ static uint32_t _xvg_compress_arc_rotate_and_range(float rotate_radians, float r
     xassert(range_norm >= 0 && range_norm <= 1);
     return _xvg_packUnorm2x16(rotate_norm, range_norm);
 }
+
+// Shapes
 
 // If 'stroke_width' is 0, the circle will be filled
 static void xvg_draw_circle(XVG* xvg, float cx, float cy, float radius_px, float stroke_width, uint32_t colour)
@@ -497,12 +510,19 @@ void xvg_draw_line_plot(
     float        stroke_width,
     uint32_t     colour);
 
+// FONTS
+// These functions return font IDs. 0 is considered to be invalid
+
 // 'font_filepath' is expected to be UTF8
 // Windows paths are expected to use backlashes ('\'), but forward probably wortk fine
 // This library takes ownership of the memory and frees it
-int xvg_add_font_from_path(XVG* xvg, const char* font_filepath);
-// Pass a buffer
-int xvg_add_font_from_memory(XVG* xvg, const void* font_data, size_t font_datalen);
+XVGFont xvg_add_font_from_path(XVG* xvg, const char* font_filepath);
+// Same as above, except takes a file buffer, and now you're responsible for freeing the memory
+// Note this memory must remain valid until you call xvg_deinit()
+XVGFont xvg_add_font_from_memory(XVG* xvg, const void* font_data, size_t font_datalen);
+
+// Sets active font to draw and create layouts with
+void xvg_set_font(XVG* xvg, XVGFont);
 
 #ifdef __cplusplus
 }
@@ -513,6 +533,7 @@ int xvg_add_font_from_memory(XVG* xvg, const void* font_data, size_t font_datale
 #ifdef XVG_IMPL
 #undef XVG_IMPL
 #include <string.h>
+#include <xhl/files.h>
 
 #if defined(XVG_TEXT_SINGLECHANNEL) || defined(XVG_TEXT_MULTICHANNEL)
 #include <ft2build.h>
@@ -568,17 +589,67 @@ void xvg_draw_line_plot(
     xassert(xvg->line_buffer_len <= XVG_ARRLEN(xvg->line_buffer));
 }
 
+XVGFont _xvg_add_font_from_memory_impl(XVG* xvg, const void* data, size_t datalen, bool owned)
+{
+    for (int i = 0; i < XVG_ARRLEN(xvg->fonts); i++)
+    {
+        XVGFontSlot* sl = xvg->fonts + i;
+        if (sl->ft_face == NULL)
+        {
+            // TODO: pass data to kbts
+            int err = FT_New_Memory_Face(xvg->ft_lib, data, datalen, 0, &sl->ft_face);
+            xassert(err == 0);
+            if (err != 0)
+                break;
+
+            sl->data      = (void*)data;
+            sl->data_size = datalen;
+            sl->owned     = owned;
+
+            FT_UInt  space_char = 32;
+            FT_Fixed advance    = 0;
+            err                 = FT_Get_Advance(sl->ft_face, space_char, FT_LOAD_NO_SCALE, &advance);
+            xassert(err == 0);
+            sl->space_advance = advance;
+
+            return (XVGFont){i + 1};
+        }
+    }
+    return (XVGFont){0};
+}
+
+XVGFont xvg_add_font_from_path(XVG* xvg, const char* path)
+{
+    void*  data    = NULL;
+    size_t datalen = 0;
+    bool   owned   = true;
+    bool   ok      = xfiles_read(path, &data, &datalen);
+    xassert(ok);
+    if (!ok)
+        return (XVGFont){0};
+    return _xvg_add_font_from_memory_impl(xvg, data, datalen, owned);
+}
+
+XVGFont xvg_add_font_from_memory(XVG* xvg, const void* data, size_t datalen)
+{
+    bool owned = false;
+    return _xvg_add_font_from_memory_impl(xvg, data, datalen, owned);
+}
+
+void xvg_set_font(XVG* xvg, XVGFont font)
+{
+    int next_font_idx = font.id - 1;
+    if (next_font_idx < 0)
+        next_font_idx = 0;
+    if (next_font_idx >= XVG_ARRLEN(xvg->fonts))
+        next_font_idx = XVG_ARRLEN(xvg->fonts) - 1;
+    xvg->current_font_idx = next_font_idx;
+}
+
 void xvg_init(XVG* xvg)
 {
-    // Font stuff
-    {
-        int err = FT_Init_FreeType(&xvg->ft_lib);
-        xassert(!err);
-
-        FT_Fixed advance = 0;
-        FT_Get_Advance(xvg->ft_face, 32, FT_LOAD_NO_SCALE, &advance);
-        xvg->space_advance = advance;
-    }
+    int ft_err = FT_Init_FreeType(&xvg->ft_lib);
+    xassert(ft_err == 0);
 
     // Shader stuff
     {
@@ -592,10 +663,10 @@ void xvg_init(XVG* xvg)
                      .dst_factor_alpha = SG_BLENDFACTOR_ONE,
             }};
 
-        xvg->shapes.pip = sg_make_pipeline(&(sg_pipeline_desc){
-            .shader    = sg_make_shader(_xvg_shapes_shader_desc(sg_query_backend())),
-            .colors[0] = BLEND_DEFAULT,
-            .label     = XVG_LABEL("xvg-shapes-pipeline")});
+        xvg->shapes.pip =
+            sg_make_pipeline(&(sg_pipeline_desc){.shader = sg_make_shader(_xvg_shapes_shader_desc(sg_query_backend())),
+                                                 .colors[0] = BLEND_DEFAULT,
+                                                 .label     = XVG_LABEL("xvg-shapes-pipeline")});
 
         xvg->shapes.sbo = sg_make_buffer(&(sg_buffer_desc){
             .usage.storage_buffer = true,
@@ -607,10 +678,10 @@ void xvg_init(XVG* xvg)
             .storage_buffer = xvg->shapes.sbo,
         });
 
-        xvg->lines.pip = sg_make_pipeline(&(sg_pipeline_desc){
-            .shader    = sg_make_shader(_xvg_lines_shader_desc(sg_query_backend())),
-            .colors[0] = BLEND_DEFAULT,
-            .label     = XVG_LABEL("xvg-line-pipeline")});
+        xvg->lines.pip =
+            sg_make_pipeline(&(sg_pipeline_desc){.shader = sg_make_shader(_xvg_lines_shader_desc(sg_query_backend())),
+                                                 .colors[0] = BLEND_DEFAULT,
+                                                 .label     = XVG_LABEL("xvg-line-pipeline")});
 
         xvg->lines.line_sbo = sg_make_buffer(&(sg_buffer_desc){
             .usage.storage_buffer = true,
@@ -630,7 +701,21 @@ void xvg_init(XVG* xvg)
     }
 }
 
-void xvg_deinit(XVG* xvg) { FT_Done_FreeType(xvg->ft_lib); }
+void xvg_deinit(XVG* xvg)
+{
+    for (int i = 0; i < XVG_ARRLEN(xvg->fonts); i++)
+    {
+        XVGFontSlot* sl = &xvg->fonts[i];
+        if (sl->data && sl->owned)
+        {
+            XFILES_FREE(sl->data);
+        }
+        // TODO: free kbts here?
+        if (sl->ft_face)
+            FT_Done_Face(sl->ft_face);
+    }
+    FT_Done_FreeType(xvg->ft_lib);
+}
 
 void xvg_begin_frame(XVG* xvg)
 {
