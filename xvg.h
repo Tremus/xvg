@@ -56,6 +56,7 @@ typedef enum XVGShapeType
     XVG_SHAPE_PIE_STROKE,
     XVG_SHAPE_ARC_ROUND_STROKE,
     XVG_SHAPE_ARC_BUTT_STROKE,
+    XVG_SHAPE_LINE_PLOT,
 } XVGShapeType;
 
 typedef enum XVGColourType
@@ -714,8 +715,8 @@ void xvg_draw_circle(XVG* xvg, float cx, float cy, float radius_px, float stroke
     *shape             = (xvg_shape_t){
                     .topleft     = {cx - radius_px, cy - radius_px},
                     .bottomright = {cx + radius_px, cy + radius_px},
-                    .colour1     = colour,
                     .sdf_data    = _xvg_compress_sdf_data(shape_type, 0, feather, stroke_width),
+                    .colour1     = colour,
     };
 }
 
@@ -871,14 +872,26 @@ void xvg_draw_line_plot(
     }
 
     xassert(end_idx >= 1);
-    xvg->tile_buffer[xvg->tile_buffer_len++] = (xvg_line_tile_t){
-        .topleft          = {x, y},
-        .bottomright      = {x + width, y + height},
-        .buffer_begin_idx = xvg->line_buffer_len,
-        .buffer_end_idx   = end_idx,
-        .stroke_width     = stroke_width,
-        .colour           = colour,
+    float feather = 4.0f / xm_minf(width, height);
+
+    uint32_t line_buffer_range = (uint32_t)xvg->line_buffer_len | ((uint32_t)end_idx << 16);
+
+    xvg_shape_t* shape = _xvg_get_shape(xvg);
+    *shape             = (xvg_shape_t){
+                    .topleft          = {x, y},
+                    .bottomright      = {x + width, y + height},
+                    .sdf_data         = _xvg_compress_sdf_data(XVG_SHAPE_LINE_PLOT, 0, feather, stroke_width),
+                    .colour1          = colour,
+                    .buffer_idx_range = line_buffer_range,
     };
+    // xvg->tile_buffer[xvg->tile_buffer_len++] = (xvg_line_tile_t){
+    //     .topleft          = {x, y},
+    //     .bottomright      = {x + width, y + height},
+    //     .buffer_begin_idx = xvg->line_buffer_len,
+    //     .buffer_end_idx   = end_idx,
+    //     .stroke_width     = stroke_width,
+    //     .colour           = colour,
+    // };
 
     xvg->line_buffer_len += N;
     xassert(xvg->line_buffer_len <= XVG_ARRLEN(xvg->line_buffer));
@@ -1673,10 +1686,10 @@ void xvg_init(XVG* xvg)
             .wrap_v        = SG_WRAP_CLAMP_TO_EDGE,
         });
 
-        xvg->shapes.pip =
-            sg_make_pipeline(&(sg_pipeline_desc){.shader = sg_make_shader(_xvg_shapes_shader_desc(sg_query_backend())),
-                                                 .colors[0] = BLEND_DEFAULT,
-                                                 .label     = XVG_LABEL("xvg-shapes-pipeline")});
+        xvg->shapes.pip = sg_make_pipeline(&(sg_pipeline_desc){
+            .shader    = sg_make_shader(_xvg_shapes_shader_desc(sg_query_backend())),
+            .colors[0] = BLEND_DEFAULT,
+            .label     = XVG_LABEL("xvg-shapes-pipeline")});
 
         xvg->shapes.sbo = sg_make_buffer(&(sg_buffer_desc){
             .usage.storage_buffer = true,
@@ -1688,10 +1701,10 @@ void xvg_init(XVG* xvg)
             .storage_buffer = xvg->shapes.sbo,
         });
 
-        xvg->lines.pip =
-            sg_make_pipeline(&(sg_pipeline_desc){.shader = sg_make_shader(_xvg_lines_shader_desc(sg_query_backend())),
-                                                 .colors[0] = BLEND_DEFAULT,
-                                                 .label     = XVG_LABEL("xvg-line-pipeline")});
+        xvg->lines.pip = sg_make_pipeline(&(sg_pipeline_desc){
+            .shader    = sg_make_shader(_xvg_lines_shader_desc(sg_query_backend())),
+            .colors[0] = BLEND_DEFAULT,
+            .label     = XVG_LABEL("xvg-line-pipeline")});
 
         xvg->lines.line_sbo = sg_make_buffer(&(sg_buffer_desc){
             .usage.storage_buffer = true,
@@ -1836,10 +1849,11 @@ void xvg_end_frame(XVG* xvg, int window_width, int window_height)
             sg_view_desc desc = sg_query_view_desc(atlas->img_view);
             sg_update_image(
                 desc.texture.image,
-                &(sg_image_data){.mip_levels[0] = {
-                                     .ptr  = xvg->text.current_atlas.img_data,
-                                     .size = XVG_ATLAS_HEIGHT * XVG_ATLAS_ROW_STRIDE,
-                                 }});
+                &(sg_image_data){
+                    .mip_levels[0] = {
+                        .ptr  = xvg->text.current_atlas.img_data,
+                        .size = XVG_ATLAS_HEIGHT * XVG_ATLAS_ROW_STRIDE,
+                    }});
             atlas->dirty = false;
         }
     }
@@ -1878,6 +1892,7 @@ void xvg_end_frame(XVG* xvg, int window_width, int window_height)
 
                 sg_apply_bindings(&(sg_bindings){
                     .views[VIEW_vs_xvg_tiles_buffer] = xvg->shapes.sbv,
+                    .views[VIEW_fs_xvg_line_buffer]  = xvg->lines.line_sbv,
                 });
                 vs_xvg_shapes_uniforms_t uniforms = {
                     .u_size                  = {window_width, window_height},

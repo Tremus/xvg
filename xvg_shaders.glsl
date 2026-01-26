@@ -17,8 +17,6 @@ struct xvg_shape
     // unorm4x8 comprised of:
     //   - uint sdf_type;   // could probably be compressed to one byte
     //   - uint grad_type;
-    //     stroking is usually in the range of 0.8-8px. We could set an arbitrary maximum of 16px
-    //     stroke widths such as 1.2, 2.5px etc are common
     //   - float stroke_width;
     //   - float feather;
     uint sdf_data;
@@ -34,6 +32,7 @@ struct xvg_shape
     vec2 gradient_a;
     vec2 gradient_b;
 
+    uint buffer_idx_range; // unorm2x16
     // uint  texid; // ???
 };
 
@@ -64,13 +63,20 @@ out flat uint colour2;
 // - vec4(cos(rotate), sin(rotate), sin(range), cos(range))
 out flat vec4 borderradius_arcpie;
 
+out float buffer_idx;
+out flat int buffer_begin_idx;
+out flat int buffer_end_idx;
+out flat float px_inc;
+
 // linear_gradient_begin
 // radial_gradient_pos
 // conic_gradient_rotate
+// inner_shadow_translate_xy
 out flat vec2 gradient_a;
 // linear_gradient_end
 // radial_gradient_radius_scale
 // conic_gradient_angle
+// inner_shadow_blur_radius
 out flat vec2 gradient_b;
 
 #define XVG_SHAPE_RECTANGLE_FILL   1
@@ -83,6 +89,7 @@ out flat vec2 gradient_b;
 #define XVG_SHAPE_PIE_STROKE       8
 #define XVG_SHAPE_ARC_ROUND_STROKE 9
 #define XVG_SHAPE_ARC_BUTT_STROKE  10
+#define XVG_SHAPE_LINE_PLOT        11
 
 #define XVG_COLOUR_SOLID  0
 #define XVG_COLOUR_LINEAR_GRADIENT 1
@@ -128,7 +135,6 @@ void main() {
     colour2 = vert.colour2;
 
     vec4 sdf_data = unpackUnorm4x8(vert.sdf_data);
-    vec2 arcpie   = 2 * PI * unpackUnorm2x16(vert.borderradius_arcpie);
 
     sdf_type     = uint(sdf_data.x * 255);
     grad_type    = uint(sdf_data.y * 255); 
@@ -149,18 +155,29 @@ void main() {
         sdf_type == XVG_SHAPE_ARC_ROUND_STROKE ||
         sdf_type == XVG_SHAPE_ARC_BUTT_STROKE)
     {
+        vec2 arcpie   = 2 * PI * unpackUnorm2x16(vert.borderradius_arcpie);
         borderradius_arcpie.xy = vec2(cos(arcpie.x), sin(arcpie.x));
         borderradius_arcpie.zw = vec2(sin(arcpie.y), cos(arcpie.y));
+    }
+
+    if (sdf_type == XVG_SHAPE_LINE_PLOT)
+    {
+        vec2 buffer_idx_range = unpackUnorm2x16(vert.buffer_idx_range) * vec2(65535);
+
+        buffer_idx = is_right ? buffer_idx_range.y : buffer_idx_range.x;
+        buffer_begin_idx = int(buffer_idx_range.x);
+        buffer_end_idx   = int(buffer_idx_range.y);
+        px_inc       = 2.0 / u_size.x;
     }
 
     if (grad_type == XVG_COLOUR_LINEAR_GRADIENT)
     {
         gradient_a = (vert.gradient_a - vert.topleft) / vec2(vw, vh);  // stop 1 xy
-        gradient_b = (vert.gradient_b   - vert.topleft) / vec2(vw, vh); // stop 2 xy
+        gradient_b = (vert.gradient_b - vert.topleft) / vec2(vw, vh); // stop 2 xy
     }
     if (grad_type == XVG_COLOUR_RADIAL_GRADIENT)
     {
-        gradient_a = (vert.gradient_a   - vert.topleft) / vec2(vw, vh); // stop 2 cx,cy
+        gradient_a = (vert.gradient_a - vert.topleft) / vec2(vw, vh); // stop 2 cx,cy
         gradient_b = vec2(vw, vh) / vert.gradient_b;                    // stop 1 radius
     }
     if (grad_type == XVG_COLOUR_CONIC_GRADIENT)
@@ -179,6 +196,14 @@ void main() {
 @fs fs_xvg_shapes
 precision mediump float;
 
+struct xvg_line_segment {
+    float y;
+};
+
+layout(binding=1) readonly buffer fs_xvg_line_buffer {
+    xvg_line_segment line_buffer[];
+};
+
 in vec2 uv;
 in flat vec2 uv_xy_scale;
 
@@ -191,6 +216,11 @@ in flat uint colour1;
 in flat uint colour2;
 
 in flat vec4 borderradius_arcpie;
+
+in float buffer_idx;
+in flat int buffer_begin_idx;
+in flat int buffer_end_idx;
+in flat float px_inc;
 
 in flat vec2 gradient_a;
 in flat vec2 gradient_b;
@@ -208,6 +238,7 @@ out vec4 frag_color;
 #define XVG_SHAPE_PIE_STROKE       8
 #define XVG_SHAPE_ARC_ROUND_STROKE 9
 #define XVG_SHAPE_ARC_BUTT_STROKE  10
+#define XVG_SHAPE_LINE_PLOT        11
 
 #define XVG_COLOUR_SOLID  0
 #define XVG_COLOUR_LINEAR_GRADIENT 1
@@ -266,6 +297,14 @@ float sdRing( in vec2 p, in vec2 n, in float r, float th )
     p = mat2x2(-n.x,-n.y,n.y,-n.x)*p;
     return max( abs(length(p)-r)-th*0.5,
                 length(vec2(p.x,max(0.0,abs(r-p.y)-th*0.5)))*sign(p.x) );
+}
+
+float sdSegment(in vec2 p, in vec2 a, in vec2 b)
+{
+    vec2  ba = b - a;
+    vec2  pa = p - a;
+    float h  = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+    return length(pa - h * ba);
 }
 
 void main()
@@ -348,6 +387,48 @@ void main()
         float d = sdRing(uv_rotated, borderradius_arcpie.zw, 1.0 - stroke_width * 0.5, stroke_width);
         float outer = smoothstep(feather, 0, d + feather * 0.5);
         shape = outer;
+    }
+    if (sdf_type == XVG_SHAPE_LINE_PLOT)
+    {
+        // Read buffer data
+
+        // If we pad the storage buffer by 1 on each side with real values, then we can get nicer looing clipped edges
+        uint idx      = min(int(buffer_idx),     buffer_end_idx - 1);
+        uint idx_prev = max(int(buffer_idx) - 1, buffer_begin_idx);
+        uint idx_next = min(int(buffer_idx) + 1, buffer_end_idx - 1);
+
+        float line_y      = line_buffer[idx].y;
+        float line_y_prev = line_buffer[idx_prev].y;
+        float line_y_next = line_buffer[idx_next].y;
+
+        line_y      = line_y      * 2 - 1;
+        line_y_prev = line_y_prev * 2 - 1;
+        line_y_next = line_y_next * 2 - 1;
+
+        // TODO: scale to dimensions
+        vec2 stroke2 = vec2(stroke_width * uv_xy_scale);
+
+        float stroke_scale = 1 - stroke2.y;
+        // float stroke_scale = 0.5;
+
+        line_y      *= stroke_scale;
+        line_y_prev *= stroke_scale;
+        line_y_next *= stroke_scale;
+
+        // build points
+        vec2 p = uv;
+        vec2 a = vec2(p.x - px_inc, line_y_prev);
+        vec2 b = vec2(p.x         , line_y);
+        vec2 c = vec2(p.x + px_inc, line_y_next);
+
+        float d1 = sdSegment(p, a, b);
+        float d2 = sdSegment(p, b, c);
+        float d = min(d1, d2);
+
+        float shape_vertical   = smoothstep(stroke2.x, 0, abs(d));
+        float shape_horizontal = smoothstep(stroke2.y, 0, abs(line_y - p.y));
+        float shape            = max(shape_vertical, shape_horizontal);
+        shape = sqrt(shape); // gamma
     }
 
     float t = 0;
@@ -515,7 +596,7 @@ struct xvg_line_segment {
 };
 
 layout(binding=1) readonly buffer fs_xvg_line_buffer {
-    xvg_line_segment sine_buffer[];
+    xvg_line_segment line_buffer[];
 };
 
 float sdSegment(in vec2 p, in vec2 a, in vec2 b)
@@ -535,32 +616,32 @@ void main()
     uint idx_prev = max(int(buffer_idx) - 1, buffer_begin_idx);
     uint idx_next = min(int(buffer_idx) + 1, buffer_end_idx - 1);
 
-    float sine_y      = sine_buffer[idx].y;
-    float sine_y_prev = sine_buffer[idx_prev].y;
-    float sine_y_next = sine_buffer[idx_next].y;
+    float line_y      = line_buffer[idx].y;
+    float line_y_prev = line_buffer[idx_prev].y;
+    float line_y_next = line_buffer[idx_next].y;
 
-    sine_y      = sine_y      * 2 - 1;
-    sine_y_prev = sine_y_prev * 2 - 1;
-    sine_y_next = sine_y_next * 2 - 1;
+    line_y      = line_y      * 2 - 1;
+    line_y_prev = line_y_prev * 2 - 1;
+    line_y_next = line_y_next * 2 - 1;
 
     float stroke_scale = 1 - stroke_width.y;
     // float stroke_scale = 0.5;
 
-    sine_y      *= stroke_scale;
-    sine_y_prev *= stroke_scale;
-    sine_y_next *= stroke_scale;
+    line_y      *= stroke_scale;
+    line_y_prev *= stroke_scale;
+    line_y_next *= stroke_scale;
 
     // build points
-    vec2 a = vec2(p.x - px_inc, sine_y_prev);
-    vec2 b = vec2(p.x           , sine_y);
-    vec2 c = vec2(p.x + px_inc, sine_y_next);
+    vec2 a = vec2(p.x - px_inc, line_y_prev);
+    vec2 b = vec2(p.x         , line_y);
+    vec2 c = vec2(p.x + px_inc, line_y_next);
 
     float d1 = sdSegment(p, a, b);
     float d2 = sdSegment(p, b, c);
     float d = min(d1, d2);
 
     float shape_vertical   = smoothstep(stroke_width.x, 0, abs(d));
-    float shape_horizontal = smoothstep(stroke_width.y, 0, abs(sine_y - p.y));
+    float shape_horizontal = smoothstep(stroke_width.y, 0, abs(line_y - p.y));
     float shape            = max(shape_vertical, shape_horizontal);
     shape = sqrt(shape); // gamma
 
