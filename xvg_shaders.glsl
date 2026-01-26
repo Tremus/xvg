@@ -437,6 +437,7 @@ layout(binding=0) readonly buffer vs_xvg_tiles_buffer {
 
 layout(binding=0) uniform vs_xvg_tiles_uniforms {
     vec2 u_size;
+    int  u_storage_buffer_offset;
 };
 
 out vec2 p;
@@ -453,7 +454,7 @@ void main() {
     uint v_idx = gl_VertexIndex / 6u;
     uint i_idx = gl_VertexIndex - v_idx * 6;
 
-    xvg_line_tile vert = vtx[v_idx];
+    xvg_line_tile vert = vtx[u_storage_buffer_offset + v_idx];
 
     // Is odd
     bool is_right = (gl_VertexIndex & 1) == 1;

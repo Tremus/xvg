@@ -38,7 +38,7 @@
 #if !defined(XVG_TEXT_SINGLECHANNEL) || !defined(XVG_TEXT_MULTICHANNEL)
 #ifdef __APPLE__
 #define XVG_TEXT_SINGLECHANNEL
-#else
+#else // Windows & Linux
 #define XVG_TEXT_MULTICHANNEL
 #endif
 #endif // XVG_TEXT_SINGLECHANNEL || XVG_TEXT_MULTICHANNEL
@@ -216,8 +216,20 @@ static void xvg_layout_set_glyphs(XVGTextLayout* l, XVGGlyphLayout* g) { l->offs
 typedef struct XVG
 {
     LinkedArena* arena;
+    void*        arena_top;
 
     LinkedArena* frame_arena;
+
+    struct XVGCommand* first_command;
+    struct XVGCommand* current_command;
+
+    struct
+    {
+        int     shape_buffer_start;
+        int     tile_buffer_start;
+        int     text_buffer_start;
+        sg_view texture;
+    } draw_start;
 
     float backingScaleFactor;
 
@@ -251,7 +263,7 @@ typedef struct XVG
         struct
         {
             int            idx;
-            stbrp_context  ctx;
+            stbrp_context  rectpack_ctx;
             stbrp_node*    nodes;
             unsigned char* img_data;
         } current_atlas;
@@ -394,6 +406,60 @@ void xvg_draw_text(
     XVGAlign    align,
     uint32_t    col);
 
+// Commands
+typedef struct XVGCommandBeginPass
+{
+    sg_pass pass;
+} XVGCommandBeginPass;
+
+typedef struct XVGCommandDraw
+{
+    int     shape_buffer_start;
+    int     shape_buffer_end;
+    int     tile_buffer_start;
+    int     tile_buffer_end;
+    int     text_buffer_start;
+    int     text_buffer_end;
+    sg_view texture;
+} XVGCommandDraw;
+
+typedef void (*XVGCustomFunc)(void* uptr);
+
+typedef struct XVGCommandCustom
+{
+    void*         uptr;
+    XVGCustomFunc func;
+} XVGCommandCustom;
+
+typedef enum XVGCommandType
+{
+    XVG_CMD_BEGIN_PASS,
+    XVG_CMD_END_PASS,
+    XVG_CMD_DRAW,
+    XVG_CMD_CUSTOM,
+} XVGCommandType;
+
+typedef struct XVGCommand
+{
+    XVGCommandType type;
+    const char*    label;
+    union
+    {
+        void* data;
+
+        XVGCommandBeginPass* beginPass;
+        XVGCommandDraw*      draw;
+        XVGCommandCustom*    custom;
+    } payload;
+
+    struct XVGCommand* next;
+} XVGCommand;
+
+void xvg_command_begin_pass(XVG* xvg, const sg_pass*, const char* label);
+void xvg_command_end_pass(XVG* xvg, const char* label);
+void xvg_command_batch_draw(XVG* xvg, const char* label);
+void xvg_command_custom(XVG* xvg, void* uptr, XVGCustomFunc func, const char* label);
+
 // #ifdef __cplusplus
 // }
 // #endif
@@ -407,11 +473,9 @@ void xvg_draw_text(
 #include <xhl/array.h>
 #include <xhl/files.h>
 
-#if defined(XVG_TEXT_SINGLECHANNEL) || defined(XVG_TEXT_MULTICHANNEL)
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include FT_ADVANCES_H
-#endif
 
 #if !defined(XVG_MALLOC) || !defined(XVG_REALLOC) || !defined(XVG_FREE)
 #include <stdlib.h>
@@ -489,6 +553,70 @@ uint32_t _xvg_pack_xy_coord(int x, int y)
     v.low  += 32767;
     v.high += 32767;
     return v.u32;
+}
+
+XVGCommand* _xvg_alloc_command(XVG* xvg, XVGCommandType type, const char* label)
+{
+    XVGCommand* cmd = linked_arena_alloc_clear(xvg->frame_arena, sizeof(*cmd));
+
+    cmd->type  = type;
+    cmd->label = label;
+
+    if (xvg->first_command == NULL)
+        xvg->first_command = cmd;
+
+    if (xvg->current_command)
+    {
+        XVG_ASSERT(xvg->current_command->next == NULL);
+        xvg->current_command->next = cmd;
+    }
+
+    xvg->current_command = cmd;
+
+    return cmd;
+}
+
+void xvg_command_begin_pass(XVG* xvg, const sg_pass* pass, const char* label)
+{
+    XVGCommand*          cmd = _xvg_alloc_command(xvg, XVG_CMD_BEGIN_PASS, label);
+    XVGCommandBeginPass* bp  = linked_arena_alloc_clear(xvg->frame_arena, sizeof(*bp));
+    cmd->payload.beginPass   = bp;
+
+    bp->pass = *pass;
+}
+
+void xvg_command_end_pass(XVG* xvg, const char* label) { _xvg_alloc_command(xvg, XVG_CMD_END_PASS, label); }
+
+void xvg_command_batch_draw(XVG* xvg, const char* label)
+{
+    XVGCommand*     cmd  = _xvg_alloc_command(xvg, XVG_CMD_DRAW, label);
+    XVGCommandDraw* draw = linked_arena_alloc_clear(xvg->frame_arena, sizeof(*draw));
+    cmd->payload.draw    = draw;
+
+    draw->shape_buffer_start = xvg->draw_start.shape_buffer_start;
+    draw->tile_buffer_start  = xvg->draw_start.tile_buffer_start;
+    draw->text_buffer_start  = xvg->draw_start.text_buffer_start;
+
+    draw->shape_buffer_end = xvg->shapes_buffer_len;
+    draw->tile_buffer_end  = xvg->tile_buffer_len;
+    draw->text_buffer_end  = xvg->text_buffer_len;
+
+    draw->texture = xvg->draw_start.texture;
+
+    xvg->draw_start.shape_buffer_start = xvg->shapes_buffer_len;
+    xvg->draw_start.tile_buffer_start  = xvg->tile_buffer_len;
+    xvg->draw_start.text_buffer_start  = xvg->text_buffer_len;
+    xvg->draw_start.texture.id         = 0;
+}
+
+void xvg_command_custom(XVG* xvg, void* uptr, XVGCustomFunc func, const char* label)
+{
+    XVGCommand*       cmd    = _xvg_alloc_command(xvg, XVG_CMD_CUSTOM, label);
+    XVGCommandCustom* custom = linked_arena_alloc_clear(xvg->frame_arena, sizeof(*custom));
+    cmd->payload.custom      = custom;
+
+    custom->uptr = uptr;
+    custom->func = func;
 }
 
 // ███████╗██╗  ██╗ █████╗ ██████╗ ███████╗███████╗
@@ -889,7 +1017,7 @@ int _xvg_render_glyph(XVG* xvg, uint32_t glyph_index, float font_size)
     {
         int        width_pixels = bmp->width / XVG_FT_BITMAP_CHANNELS;
         stbrp_rect rect         = {.w = width_pixels + RECTPACK_PADDING, .h = bmp->rows + RECTPACK_PADDING};
-        num_packed              = stbrp_pack_rects(&xvg->text.current_atlas.ctx, &rect, 1);
+        num_packed              = stbrp_pack_rects(&xvg->text.current_atlas.rectpack_ctx, &rect, 1);
 
         bool failed_to_pack = num_packed == 0;
         if (failed_to_pack)
@@ -897,6 +1025,7 @@ int _xvg_render_glyph(XVG* xvg, uint32_t glyph_index, float font_size)
             atlas->full = true;
 
             bool can_create_new_atlas = (xvg->text.current_atlas.idx + 1) < XVG_ARRLEN(xvg->text.atlases);
+            XVG_ASSERT(can_create_new_atlas);
             if (can_create_new_atlas) // atlas is full
             {
                 // make new atlas
@@ -906,16 +1035,16 @@ int _xvg_render_glyph(XVG* xvg, uint32_t glyph_index, float font_size)
                 atlas = xvg->text.atlases + xvg->text.current_atlas.idx;
 
                 // Clear rectpack
-                memset(&xvg->text.current_atlas.ctx, 0, sizeof(xvg->text.current_atlas.ctx));
+                memset(&xvg->text.current_atlas.rectpack_ctx, 0, sizeof(xvg->text.current_atlas.rectpack_ctx));
                 stbrp_init_target(
-                    &xvg->text.current_atlas.ctx,
+                    &xvg->text.current_atlas.rectpack_ctx,
                     XVG_ATLAS_WIDTH - RECTPACK_PADDING,
                     XVG_ATLAS_HEIGHT - RECTPACK_PADDING,
                     xvg->text.current_atlas.nodes,
                     xarr_len(xvg->text.current_atlas.nodes));
 
                 rect       = (stbrp_rect){.w = width_pixels + RECTPACK_PADDING, .h = bmp->rows + RECTPACK_PADDING};
-                num_packed = stbrp_pack_rects(&xvg->text.current_atlas.ctx, &rect, 1);
+                num_packed = stbrp_pack_rects(&xvg->text.current_atlas.rectpack_ctx, &rect, 1);
                 xassert(num_packed == 1);
             }
         }
@@ -1015,14 +1144,31 @@ XVGAtlasRect _xvg_get_glyph(XVG* xvg, uint32_t glyph_index, float font_size)
     return stub;
 }
 
+xvg_text_t* _xvg_get_text(XVG* xvg)
+{
+    static xvg_text_t stub;
+
+    xvg_text_t* ret =
+        xvg->text_buffer_len < XVG_ARRLEN(xvg->text_buffer) ? &xvg->text_buffer[xvg->text_buffer_len] : &stub;
+
+    xvg->text_buffer_len++;
+    if (xvg->text_buffer_len > XVG_ARRLEN(xvg->text_buffer))
+        xvg->text_buffer_len = XVG_ARRLEN(xvg->text_buffer);
+    return ret;
+}
+
 bool _xvg_push_glyph(XVG* xvg, int pen_x, int pen_y, const XVGAtlasRect* rect, uint32_t colour)
 {
-    bool should_push  = xvg->text_buffer_len < XVG_ARRLEN(xvg->text_buffer);
-    should_push      &= rect->img_view.id != 0;
+    bool should_push = rect->img_view.id != 0;
     XVG_ASSERT(should_push);
     if (should_push)
     {
-        xvg_text_t* obj   = xvg->text_buffer + xvg->text_buffer_len;
+        if (xvg->draw_start.texture.id == 0)
+            xvg->draw_start.texture = rect->img_view;
+        if (xvg->draw_start.texture.id != rect->img_view.id)
+            xvg_command_batch_draw(xvg, XVG_LABEL("_xvg_push_glyph"));
+
+        xvg_text_t* obj   = _xvg_get_text(xvg);
         obj->topleft      = _xvg_pack_xy_coord(pen_x + rect->bearing_x, pen_y - rect->bearing_y);
         obj->atlas_coords = (xvecu){.r = rect->x, .g = rect->y, .b = rect->w, .a = rect->h}.u32;
         obj->colour       = colour;
@@ -1489,7 +1635,8 @@ void xvg_init(XVG* xvg)
 {
     xvg->backingScaleFactor = 1;
 
-    xvg->arena = linked_arena_create_ex(0, 1024 * 64);
+    xvg->arena       = linked_arena_create_ex(0, 1024 * 64);
+    xvg->frame_arena = linked_arena_create_ex(0, 1024 * 64);
 
     static const sg_color_target_state BLEND_DEFAULT = {
         .write_mask = SG_COLORMASK_RGBA,
@@ -1526,10 +1673,10 @@ void xvg_init(XVG* xvg)
             .wrap_v        = SG_WRAP_CLAMP_TO_EDGE,
         });
 
-        xvg->shapes.pip = sg_make_pipeline(&(sg_pipeline_desc){
-            .shader    = sg_make_shader(_xvg_shapes_shader_desc(sg_query_backend())),
-            .colors[0] = BLEND_DEFAULT,
-            .label     = XVG_LABEL("xvg-shapes-pipeline")});
+        xvg->shapes.pip =
+            sg_make_pipeline(&(sg_pipeline_desc){.shader = sg_make_shader(_xvg_shapes_shader_desc(sg_query_backend())),
+                                                 .colors[0] = BLEND_DEFAULT,
+                                                 .label     = XVG_LABEL("xvg-shapes-pipeline")});
 
         xvg->shapes.sbo = sg_make_buffer(&(sg_buffer_desc){
             .usage.storage_buffer = true,
@@ -1541,10 +1688,10 @@ void xvg_init(XVG* xvg)
             .storage_buffer = xvg->shapes.sbo,
         });
 
-        xvg->lines.pip = sg_make_pipeline(&(sg_pipeline_desc){
-            .shader    = sg_make_shader(_xvg_lines_shader_desc(sg_query_backend())),
-            .colors[0] = BLEND_DEFAULT,
-            .label     = XVG_LABEL("xvg-line-pipeline")});
+        xvg->lines.pip =
+            sg_make_pipeline(&(sg_pipeline_desc){.shader = sg_make_shader(_xvg_lines_shader_desc(sg_query_backend())),
+                                                 .colors[0] = BLEND_DEFAULT,
+                                                 .label     = XVG_LABEL("xvg-line-pipeline")});
 
         xvg->lines.line_sbo = sg_make_buffer(&(sg_buffer_desc){
             .usage.storage_buffer = true,
@@ -1580,20 +1727,19 @@ void xvg_init(XVG* xvg)
         });
         xassert(xvg->text.sbv.id);
 
-        xvg->text.pip = sg_make_pipeline(&(sg_pipeline_desc) {
+        xvg->text.pip = sg_make_pipeline(&(sg_pipeline_desc){
 #if defined(XVG_TEXT_MULTICHANNEL)
             .shader    = sg_make_shader(_xvg_text_multichannel_shader_desc(sg_query_backend())),
             .colors[0] = BLEND_DUAL_SOURCE,
 #endif
 #if defined(XVG_TEXT_SINGLECHANNEL)
-            .shader    = sg_make_shader(_xvg_text_singlechannel_shader_desc(sg_query_backend()));
+            .shader    = sg_make_shader(_xvg_text_singlechannel_shader_desc(sg_query_backend())),
             .colors[0] = BLEND_DEFAULT,
 #endif
-            .label = XVG_LABEL("xvg-text")
-        });
+            .label = XVG_LABEL("xvg-text")});
         xassert(xvg->text.pip.id);
 
-        xarr_setcap(xvg->text.rects, 64);
+        xarr_setcap(xvg->text.rects, 256);
         xarr_setlen(xvg->text.rects, 0);
         xvg->text.atlases[0]        = _xvg_create_new_atlas();
         xvg->text.current_atlas.idx = 0;
@@ -1603,7 +1749,7 @@ void xvg_init(XVG* xvg)
         xvg->text.current_atlas.img_data = XVG_MALLOC(img_size);
         memset(xvg->text.current_atlas.img_data, 0, img_size);
         stbrp_init_target(
-            &xvg->text.current_atlas.ctx,
+            &xvg->text.current_atlas.rectpack_ctx,
             XVG_ATLAS_WIDTH - RECTPACK_PADDING,
             XVG_ATLAS_HEIGHT - RECTPACK_PADDING,
             xvg->text.current_atlas.nodes,
@@ -1630,11 +1776,22 @@ void xvg_deinit(XVG* xvg)
     }
     FT_Done_FreeType(xvg->text.ft_lib);
 
+    linked_arena_destroy(xvg->frame_arena);
     linked_arena_destroy(xvg->arena);
 }
 
 void xvg_begin_frame(XVG* xvg)
 {
+    // Oh no, you forgot to call xvg_end_frame()
+    // Or perhaps you called a function that caused you to continue processing in your or the OS's event loop
+    XVG_ASSERT(xvg->arena_top == NULL);
+    xvg->arena_top = linked_arena_get_top(xvg->arena);
+    linked_arena_clear(xvg->frame_arena);
+
+    xvg->first_command   = NULL;
+    xvg->current_command = NULL;
+    memset(&xvg->draw_start, 0, sizeof(xvg->draw_start));
+
     xvg->text.current_font_idx = 0;
     xvg->shapes_buffer_len     = 0;
     xvg->line_buffer_len       = 0;
@@ -1644,6 +1801,8 @@ void xvg_begin_frame(XVG* xvg)
 
 void xvg_end_frame(XVG* xvg, int window_width, int window_height)
 {
+    xvg_command_batch_draw(xvg, XVG_LABEL("xvg_end_frame"));
+
     // Upload data
     if (xvg->shapes_buffer_len)
     {
@@ -1677,66 +1836,106 @@ void xvg_end_frame(XVG* xvg, int window_width, int window_height)
             sg_view_desc desc = sg_query_view_desc(atlas->img_view);
             sg_update_image(
                 desc.texture.image,
-                &(sg_image_data){
-                    .mip_levels[0] = {
-                        .ptr  = xvg->text.current_atlas.img_data,
-                        .size = XVG_ATLAS_HEIGHT * XVG_ATLAS_ROW_STRIDE,
-                    }});
+                &(sg_image_data){.mip_levels[0] = {
+                                     .ptr  = xvg->text.current_atlas.img_data,
+                                     .size = XVG_ATLAS_HEIGHT * XVG_ATLAS_ROW_STRIDE,
+                                 }});
             atlas->dirty = false;
         }
     }
 
-    // Draw shapes
-
-    if (xvg->shapes_buffer_len)
+    // Process commands
+    int         ncommands = 0;
+    XVGCommand* cmd       = xvg->first_command;
+    while (cmd != NULL)
     {
-        sg_apply_pipeline(xvg->shapes.pip);
+        switch (cmd->type)
+        {
+        case XVG_CMD_BEGIN_PASS:
+        {
+            XVGCommandBeginPass* p = cmd->payload.beginPass;
+            sg_begin_pass(&p->pass);
+            break;
+        }
+        case XVG_CMD_END_PASS:
+            sg_end_pass();
+            break;
+        case XVG_CMD_CUSTOM:
+        {
+            XVGCommandCustom* custom = cmd->payload.custom;
+            custom->func(custom->uptr);
+            break;
+        }
+        case XVG_CMD_DRAW:
+        {
+            XVGCommandDraw* draw = cmd->payload.draw;
 
-        sg_apply_bindings(&(sg_bindings){
-            .views[VIEW_vs_xvg_tiles_buffer] = xvg->shapes.sbv,
-        });
-        vs_xvg_shapes_uniforms_t uniforms = {
-            .u_size                  = {(float)window_width, (float)window_height},
-            .u_storage_buffer_offset = 0,
-        };
-        sg_apply_uniforms(UB_vs_xvg_shapes_uniforms, &SG_RANGE(uniforms));
-        sg_draw(0, xvg->shapes_buffer_len * 6, 1);
+            const int num_shapes = draw->shape_buffer_end - draw->shape_buffer_start;
+            XVG_ASSERT(num_shapes >= 0);
+            if (num_shapes)
+            {
+                sg_apply_pipeline(xvg->shapes.pip);
+
+                sg_apply_bindings(&(sg_bindings){
+                    .views[VIEW_vs_xvg_tiles_buffer] = xvg->shapes.sbv,
+                });
+                vs_xvg_shapes_uniforms_t uniforms = {
+                    .u_size                  = {window_width, window_height},
+                    .u_storage_buffer_offset = draw->shape_buffer_start,
+                };
+                sg_apply_uniforms(UB_vs_xvg_shapes_uniforms, &SG_RANGE(uniforms));
+                sg_draw(0, num_shapes * 6, 1);
+            }
+
+            const int num_tiles = draw->tile_buffer_end - draw->tile_buffer_start;
+            XVG_ASSERT(num_tiles >= 0);
+            if (num_tiles)
+            {
+                sg_apply_pipeline(xvg->lines.pip);
+                sg_apply_bindings(&(sg_bindings){
+                    .views[VIEW_vs_xvg_tiles_buffer] = xvg->lines.tile_sbv,
+                    .views[VIEW_fs_xvg_line_buffer]  = xvg->lines.line_sbv,
+                });
+
+                vs_xvg_tiles_uniforms_t uniforms = {
+                    .u_size                  = {window_width, window_height},
+                    .u_storage_buffer_offset = draw->tile_buffer_start,
+                };
+                sg_apply_uniforms(UB_vs_xvg_tiles_uniforms, &SG_RANGE(uniforms));
+
+                sg_draw(0, 6 * num_tiles, 1);
+            }
+
+            const int num_text = draw->text_buffer_end - draw->text_buffer_start;
+            XVG_ASSERT(num_text >= 0);
+            if (num_text)
+            {
+                XVG_ASSERT(draw->texture.id != 0); // You forgot to set the current texture
+                sg_apply_pipeline(xvg->text.pip);
+                sg_apply_bindings(&(sg_bindings){
+                    .views[VIEW_vs_xvg_text_buffer] = xvg->text.sbv,
+                    .views[VIEW_fs_xvg_text_tex]    = draw->texture,
+                    .samplers[SMP_fs_xvg_text_smp]  = xvg->smp_nearest_neighbour,
+                });
+
+                vs_xvg_text_uniforms_t uniforms = {
+                    .u_view_size  = {window_width, window_height},
+                    .u_sbo_offset = draw->text_buffer_start,
+                };
+                sg_apply_uniforms(UB_vs_xvg_text_uniforms, &SG_RANGE(uniforms));
+
+                sg_draw(0, 6 * xvg->text_buffer_len, 1);
+            }
+            break;
+        }
+        }
+
+        cmd = cmd->next;
+        ncommands++;
     }
 
-    if (xvg->tile_buffer_len)
-    {
-        sg_apply_pipeline(xvg->lines.pip);
-        sg_apply_bindings(&(sg_bindings){
-            .views[VIEW_vs_xvg_tiles_buffer] = xvg->lines.tile_sbv,
-            .views[VIEW_fs_xvg_line_buffer]  = xvg->lines.line_sbv,
-        });
-
-        vs_xvg_tiles_uniforms_t uniforms = {
-            .u_size = {(float)window_width, (float)window_height},
-        };
-        sg_apply_uniforms(UB_vs_xvg_tiles_uniforms, &SG_RANGE(uniforms));
-
-        sg_draw(0, 6 * xvg->tile_buffer_len, 1);
-    }
-
-    if (xvg->text_buffer_len)
-    {
-        sg_apply_pipeline(xvg->text.pip);
-        XVGAtlas atlas = xvg->text.atlases[xvg->text.current_atlas.idx];
-        sg_apply_bindings(&(sg_bindings){
-            .views[VIEW_vs_xvg_text_buffer] = xvg->text.sbv,
-            .views[VIEW_fs_xvg_text_tex]    = atlas.img_view,
-            .samplers[SMP_fs_xvg_text_smp]  = xvg->smp_nearest_neighbour,
-        });
-
-        vs_xvg_text_uniforms_t uniforms = {
-            .u_view_size  = {window_width, window_height},
-            .u_sbo_offset = 0,
-        };
-        sg_apply_uniforms(UB_vs_xvg_text_uniforms, &SG_RANGE(uniforms));
-
-        sg_draw(0, 6 * xvg->text_buffer_len, 1);
-    }
+    linked_arena_release(xvg->arena, xvg->arena_top);
+    xvg->arena_top = NULL;
 }
 
 #endif // XVG_IMPL
