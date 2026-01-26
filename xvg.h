@@ -10,12 +10,10 @@
 #include <xhl/vector.h>
 
 /*
-// TODO: combine line tiles with shapes shader
 // TODO: increase max stroke width for line plots
 // TODO: rounded rectangle scissoring for line plots. Will require sdRoundBox()
 // TODO: support fallback fonts for missing glyphs
 // TODO: support intelligent batching of text when using multiple atlases
-// TODO: make a xvg_make_gradient() function to help reduce the number of draw_rect_functions()
 */
 
 // #ifdef __cplusplus
@@ -227,7 +225,6 @@ typedef struct XVG
     struct
     {
         int     shape_buffer_start;
-        int     tile_buffer_start;
         int     text_buffer_start;
         sg_view texture;
     } draw_start;
@@ -242,16 +239,10 @@ typedef struct XVG
         sg_pipeline pip;
         sg_buffer   sbo;
         sg_view     sbv;
-    } shapes;
 
-    struct
-    {
-        sg_pipeline pip;
-        sg_buffer   line_sbo; // normalised y values
-        sg_view     line_sbv;
-        sg_buffer   tile_sbo; // vertex pulling
-        sg_view     tile_sbv;
-    } lines;
+        sg_buffer line_sbo; // normalised y values
+        sg_view   line_sbv;
+    } shapes;
 
     // Text pipeline
     struct
@@ -299,12 +290,6 @@ typedef struct XVG
 #endif
     size_t             line_buffer_len;
     xvg_line_segment_t line_buffer[XVG_LINE_BUFFER_CAPACITY];
-
-#ifndef XVG_LINE_TILE_CAPACITY
-#define XVG_LINE_TILE_CAPACITY 32
-#endif
-    size_t          tile_buffer_len;
-    xvg_line_tile_t tile_buffer[XVG_LINE_TILE_CAPACITY];
 
 #ifndef XVG_MAX_GLYPHS
 #define XVG_MAX_GLYPHS 1024
@@ -423,8 +408,6 @@ typedef struct XVGCommandDraw
 {
     int     shape_buffer_start;
     int     shape_buffer_end;
-    int     tile_buffer_start;
-    int     tile_buffer_end;
     int     text_buffer_start;
     int     text_buffer_end;
     sg_view texture;
@@ -635,22 +618,25 @@ void xvg_command_set_viewport(XVG* xvg, int x, int y, int w, int h, const char* 
 
 void xvg_command_batch_draw(XVG* xvg, const char* label)
 {
+    if (xvg->draw_start.shape_buffer_start == xvg->shapes_buffer_len &&
+        xvg->draw_start.text_buffer_start == xvg->text_buffer_len)
+    {
+        return; // nothing to draw
+    }
+
     XVGCommand*     cmd  = _xvg_alloc_command(xvg, XVG_CMD_DRAW, label);
     XVGCommandDraw* draw = linked_arena_alloc_clear(xvg->frame_arena, sizeof(*draw));
     cmd->payload.draw    = draw;
 
     draw->shape_buffer_start = xvg->draw_start.shape_buffer_start;
-    draw->tile_buffer_start  = xvg->draw_start.tile_buffer_start;
     draw->text_buffer_start  = xvg->draw_start.text_buffer_start;
 
     draw->shape_buffer_end = xvg->shapes_buffer_len;
-    draw->tile_buffer_end  = xvg->tile_buffer_len;
     draw->text_buffer_end  = xvg->text_buffer_len;
 
     draw->texture = xvg->draw_start.texture;
 
     xvg->draw_start.shape_buffer_start = xvg->shapes_buffer_len;
-    xvg->draw_start.tile_buffer_start  = xvg->tile_buffer_len;
     xvg->draw_start.text_buffer_start  = xvg->text_buffer_len;
     xvg->draw_start.texture.id         = 0;
 }
@@ -889,14 +875,14 @@ void xvg_draw_line_plot(
     float        stroke_width,
     uint32_t     colour)
 {
-    xassert(xvg->tile_buffer_len <= XVG_ARRLEN(xvg->tile_buffer));
-    size_t remaining_capacity = XVG_ARRLEN(xvg->line_buffer) - xvg->tile_buffer_len;
+    size_t remaining_capacity = XVG_ARRLEN(xvg->line_buffer) - xvg->line_buffer_len;
 
     int N = width;
 
     if (N > remaining_capacity)
         N = 0;
 
+    XVG_ASSERT(N > 0);
     if (N == 0)
         return;
 
@@ -1743,26 +1729,13 @@ void xvg_init(XVG* xvg)
             .storage_buffer = xvg->shapes.sbo,
         });
 
-        xvg->lines.pip =
-            sg_make_pipeline(&(sg_pipeline_desc){.shader = sg_make_shader(_xvg_lines_shader_desc(sg_query_backend())),
-                                                 .colors[0] = BLEND_DEFAULT,
-                                                 .label     = XVG_LABEL("xvg-line-pipeline")});
-
-        xvg->lines.line_sbo = sg_make_buffer(&(sg_buffer_desc){
+        xvg->shapes.line_sbo = sg_make_buffer(&(sg_buffer_desc){
             .usage.storage_buffer = true,
             .usage.stream_update  = true,
             .size                 = sizeof(xvg->line_buffer),
             .label                = XVG_LABEL("xvg-line-buffer"),
         });
-        xvg->lines.line_sbv = sg_make_view(&(sg_view_desc){.storage_buffer = xvg->lines.line_sbo});
-
-        xvg->lines.tile_sbo = sg_make_buffer(&(sg_buffer_desc){
-            .usage.storage_buffer = true,
-            .usage.stream_update  = true,
-            .size                 = sizeof(xvg->tile_buffer),
-            .label                = XVG_LABEL("xvg-tile-buffer"),
-        });
-        xvg->lines.tile_sbv = sg_make_view(&(sg_view_desc){.storage_buffer = xvg->lines.tile_sbo});
+        xvg->shapes.line_sbv = sg_make_view(&(sg_view_desc){.storage_buffer = xvg->shapes.line_sbo});
     }
 
     // Text
@@ -1850,7 +1823,6 @@ void xvg_begin_frame(XVG* xvg)
     xvg->text.current_font_idx = 0;
     xvg->shapes_buffer_len     = 0;
     xvg->line_buffer_len       = 0;
-    xvg->tile_buffer_len       = 0;
     xvg->text_buffer_len       = 0;
 }
 
@@ -1869,13 +1841,7 @@ void xvg_end_frame(XVG* xvg, int window_width, int window_height)
     {
         size_t   num_bytes = sizeof(xvg->line_buffer[0]) * xvg->line_buffer_len;
         sg_range range     = {.ptr = xvg->line_buffer, .size = num_bytes};
-        sg_update_buffer(xvg->lines.line_sbo, &range);
-    }
-    if (xvg->tile_buffer_len)
-    {
-        size_t   num_bytes = sizeof(xvg->tile_buffer[0]) * xvg->tile_buffer_len;
-        sg_range range     = {.ptr = xvg->tile_buffer, .size = num_bytes};
-        sg_update_buffer(xvg->lines.tile_sbo, &range);
+        sg_update_buffer(xvg->shapes.line_sbo, &range);
     }
     if (xvg->text_buffer_len)
     {
@@ -1944,8 +1910,8 @@ void xvg_end_frame(XVG* xvg, int window_width, int window_height)
                 sg_apply_pipeline(xvg->shapes.pip);
 
                 sg_apply_bindings(&(sg_bindings){
-                    .views[VIEW_vs_xvg_tiles_buffer] = xvg->shapes.sbv,
-                    .views[VIEW_fs_xvg_line_buffer]  = xvg->lines.line_sbv,
+                    .views[VIEW_vs_xvg_shapes_buffer] = xvg->shapes.sbv,
+                    .views[VIEW_fs_xvg_line_buffer]   = xvg->shapes.line_sbv,
                 });
                 vs_xvg_shapes_uniforms_t uniforms = {
                     .u_size                  = {window_width, window_height},
@@ -1953,26 +1919,6 @@ void xvg_end_frame(XVG* xvg, int window_width, int window_height)
                 };
                 sg_apply_uniforms(UB_vs_xvg_shapes_uniforms, &SG_RANGE(uniforms));
                 sg_draw(0, num_shapes * 6, 1);
-            }
-
-            const int num_tiles = draw->tile_buffer_end - draw->tile_buffer_start;
-            XVG_ASSERT(num_tiles >= 0);
-            XVG_ASSERT(num_tiles == 0);
-            if (num_tiles)
-            {
-                sg_apply_pipeline(xvg->lines.pip);
-                sg_apply_bindings(&(sg_bindings){
-                    .views[VIEW_vs_xvg_tiles_buffer] = xvg->lines.tile_sbv,
-                    .views[VIEW_fs_xvg_line_buffer]  = xvg->lines.line_sbv,
-                });
-
-                vs_xvg_tiles_uniforms_t uniforms = {
-                    .u_size                  = {window_width, window_height},
-                    .u_storage_buffer_offset = draw->tile_buffer_start,
-                };
-                sg_apply_uniforms(UB_vs_xvg_tiles_uniforms, &SG_RANGE(uniforms));
-
-                sg_draw(0, 6 * num_tiles, 1);
             }
 
             const int num_text = draw->text_buffer_end - draw->text_buffer_start;
