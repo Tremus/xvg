@@ -66,6 +66,7 @@ typedef enum XVGColourType
     XVG_COLOUR_BOX_GRADIENT,
 } XVGColourType;
 
+// Text alignment flags
 typedef enum XVGAlign
 {
     // Horizontal align
@@ -79,8 +80,10 @@ typedef enum XVGAlign
     XVG_ALIGN_CENTRE_Y = 1 << 3, // Align text vertically to middle.
     XVG_ALIGN_BOTTOM   = 1 << 4, // Align text vertically to bottom.
 
-    // The following use ascender and descender information from the glyphs in the top & bottom rows to calculate a
-    // centre alignment
+    // "Tight" alignment removes any vertical padding recommended by the fonts ascender/descender info
+    // eg. if the text "yes" (note the lower case) is tight alligned to the top, the top pixels of y, e & s will hug the
+    // top. Adding an upper case letter to that sequence (eg. yesterday) will push the other characters down
+    // This is meant to be useful when you want text properly centre aligned
     XVG_ALIGN_TOP_TIGHT      = 1 << 5,
     XVG_ALIGN_CENTRE_Y_TIGHT = 1 << 6,
     XVG_ALIGN_BOTTOM_TIGHT   = 1 << 7,
@@ -643,6 +646,8 @@ void xvg_command_batch_draw(XVG* xvg, const char* label)
 
 void xvg_command_custom(XVG* xvg, void* uptr, XVGCustomFunc func, const char* label)
 {
+    xvg_command_batch_draw(xvg, XVG_LABEL("xvg_command_custom()"));
+
     XVGCommand*       cmd    = _xvg_alloc_command(xvg, XVG_CMD_CUSTOM, label);
     XVGCommandCustom* custom = linked_arena_alloc_clear(xvg->frame_arena, sizeof(*custom));
     cmd->payload.custom      = custom;
