@@ -858,7 +858,7 @@ void xvg_draw_line_plot(
     if (N == 0)
         return;
 
-    int end_idx = xvg->line_buffer_len + N;
+    uint32_t end_idx = xvg->line_buffer_len + N;
 
     if (xvg->backingScaleFactor == 1)
     {
@@ -874,7 +874,7 @@ void xvg_draw_line_plot(
     xassert(end_idx >= 1);
     float feather = 4.0f / xm_minf(width, height);
 
-    uint32_t line_buffer_range = (uint32_t)xvg->line_buffer_len | ((uint32_t)end_idx << 16);
+    uint32_t line_buffer_range = (uint32_t)xvg->line_buffer_len | (end_idx << 16);
 
     xvg_shape_t* shape = _xvg_get_shape(xvg);
     *shape             = (xvg_shape_t){
@@ -1904,6 +1904,7 @@ void xvg_end_frame(XVG* xvg, int window_width, int window_height)
 
             const int num_tiles = draw->tile_buffer_end - draw->tile_buffer_start;
             XVG_ASSERT(num_tiles >= 0);
+            XVG_ASSERT(num_tiles == 0);
             if (num_tiles)
             {
                 sg_apply_pipeline(xvg->lines.pip);

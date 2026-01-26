@@ -164,7 +164,7 @@ void main() {
     {
         vec2 buffer_idx_range = unpackUnorm2x16(vert.buffer_idx_range) * vec2(65535);
 
-        buffer_idx = is_right ? buffer_idx_range.y : buffer_idx_range.x;
+        buffer_idx       = is_right ? buffer_idx_range.y : buffer_idx_range.x;
         buffer_begin_idx = int(buffer_idx_range.x);
         buffer_end_idx   = int(buffer_idx_range.y);
         px_inc       = 2.0 / u_size.x;
@@ -427,7 +427,8 @@ void main()
 
         float shape_vertical   = smoothstep(stroke2.x, 0, abs(d));
         float shape_horizontal = smoothstep(stroke2.y, 0, abs(line_y - p.y));
-        float shape            = max(shape_vertical, shape_horizontal);
+
+        shape = max(shape_vertical, shape_horizontal);
         shape = sqrt(shape); // gamma
     }
 
