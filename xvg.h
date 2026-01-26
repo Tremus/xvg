@@ -413,6 +413,12 @@ typedef struct XVGCommandBeginPass
     sg_pass pass;
 } XVGCommandBeginPass;
 
+typedef struct XVGCommandSetScissor
+{
+    int x, y, w, h;
+} XVGCommandSetScissor;
+typedef struct XVGCommandSetScissor XVGCommandSetViewport;
+
 typedef struct XVGCommandDraw
 {
     int     shape_buffer_start;
@@ -436,6 +442,8 @@ typedef enum XVGCommandType
 {
     XVG_CMD_BEGIN_PASS,
     XVG_CMD_END_PASS,
+    XVG_CMD_SET_SCISSOR,
+    XVG_CMD_SET_VIEWPORT,
     XVG_CMD_DRAW,
     XVG_CMD_CUSTOM,
 } XVGCommandType;
@@ -448,9 +456,11 @@ typedef struct XVGCommand
     {
         void* data;
 
-        XVGCommandBeginPass* beginPass;
-        XVGCommandDraw*      draw;
-        XVGCommandCustom*    custom;
+        XVGCommandBeginPass*   beginPass;
+        XVGCommandDraw*        draw;
+        XVGCommandSetScissor*  scissor;
+        XVGCommandSetViewport* viewport;
+        XVGCommandCustom*      custom;
     } payload;
 
     struct XVGCommand* next;
@@ -458,6 +468,8 @@ typedef struct XVGCommand
 
 void xvg_command_begin_pass(XVG* xvg, const sg_pass*, const char* label);
 void xvg_command_end_pass(XVG* xvg, const char* label);
+void xvg_command_set_scissor(XVG* xvg, int x, int y, int w, int h, const char* label);
+void xvg_command_set_viewport(XVG* xvg, int x, int y, int w, int h, const char* label);
 void xvg_command_batch_draw(XVG* xvg, const char* label);
 void xvg_command_custom(XVG* xvg, void* uptr, XVGCustomFunc func, const char* label);
 
@@ -485,12 +497,12 @@ void xvg_command_custom(XVG* xvg, void* uptr, XVGCustomFunc func, const char* la
 #define XVG_FREE(ptr)        free(ptr)
 #endif
 
-uint32_t _xvg_compress_sdf_data(unsigned sdf_type, unsigned grad_type, float feather, float stroke_width)
+uint32_t _xvg_compress_sdf_data(XVGShapeType shape_type, XVGColourType col_type, float feather, float stroke_width)
 {
     xassert(stroke_width >= 0 && stroke_width < 16);
     xvecu compressed = {
-        .r = sdf_type,
-        .g = grad_type,
+        .r = shape_type,
+        .g = col_type,
         .b = (uint8_t)(xm_minf(255, feather * 255)),
         .a = (uint8_t)(xm_minf(255, stroke_width * 16)),
     };
@@ -586,7 +598,40 @@ void xvg_command_begin_pass(XVG* xvg, const sg_pass* pass, const char* label)
     bp->pass = *pass;
 }
 
-void xvg_command_end_pass(XVG* xvg, const char* label) { _xvg_alloc_command(xvg, XVG_CMD_END_PASS, label); }
+void xvg_command_end_pass(XVG* xvg, const char* label)
+{
+    xvg_command_batch_draw(xvg, XVG_LABEL("xvg_command_end_pass()"));
+
+    _xvg_alloc_command(xvg, XVG_CMD_END_PASS, label);
+}
+
+void xvg_command_set_scissor(XVG* xvg, int x, int y, int w, int h, const char* label)
+{
+    xvg_command_batch_draw(xvg, XVG_LABEL("xvg_command_set_scissor()"));
+
+    XVGCommand*           cmd = _xvg_alloc_command(xvg, XVG_CMD_SET_SCISSOR, label);
+    XVGCommandSetScissor* ss  = linked_arena_alloc_clear(xvg->frame_arena, sizeof(*ss));
+    cmd->payload.scissor      = ss;
+
+    ss->x = x;
+    ss->y = y;
+    ss->w = w;
+    ss->h = h;
+}
+
+void xvg_command_set_viewport(XVG* xvg, int x, int y, int w, int h, const char* label)
+{
+    xvg_command_batch_draw(xvg, XVG_LABEL("xvg_command_set_viewport()"));
+
+    XVGCommand*            cmd = _xvg_alloc_command(xvg, XVG_CMD_SET_VIEWPORT, label);
+    XVGCommandSetViewport* sv  = linked_arena_alloc_clear(xvg->frame_arena, sizeof(*sv));
+    cmd->payload.viewport      = sv;
+
+    sv->x = x;
+    sv->y = y;
+    sv->w = w;
+    sv->h = h;
+}
 
 void xvg_command_batch_draw(XVG* xvg, const char* label)
 {
@@ -812,19 +857,16 @@ void xvg_draw_arc(
     bool     butt,
     uint32_t colour)
 {
-    float feather      = 2.0f / radius_px;
-    float angle_range  = end_radians - start_radians;
-    float angle_rotate = (end_radians + start_radians);
+    XVGShapeType shape_type   = butt ? XVG_SHAPE_ARC_BUTT_STROKE : XVG_SHAPE_ARC_ROUND_STROKE;
+    float        feather      = 2.0f / radius_px;
+    float        angle_range  = end_radians - start_radians;
+    float        angle_rotate = (end_radians + start_radians);
 
     xvg_shape_t* shape = _xvg_get_shape(xvg);
     *shape             = (xvg_shape_t){
-                    .topleft     = {cx - radius_px, cy - radius_px},
-                    .bottomright = {cx + radius_px, cy + radius_px},
-                    .sdf_data    = _xvg_compress_sdf_data(
-            butt ? XVG_SHAPE_ARC_BUTT_STROKE : XVG_SHAPE_ARC_ROUND_STROKE,
-            0,
-            feather,
-            stroke_width),
+                    .topleft             = {cx - radius_px, cy - radius_px},
+                    .bottomright         = {cx + radius_px, cy + radius_px},
+                    .sdf_data            = _xvg_compress_sdf_data(shape_type, 0, feather, stroke_width),
                     .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(angle_rotate * 0.5f, angle_range * 0.5f),
                     .colour1             = colour,
     };
@@ -1686,10 +1728,10 @@ void xvg_init(XVG* xvg)
             .wrap_v        = SG_WRAP_CLAMP_TO_EDGE,
         });
 
-        xvg->shapes.pip = sg_make_pipeline(&(sg_pipeline_desc){
-            .shader    = sg_make_shader(_xvg_shapes_shader_desc(sg_query_backend())),
-            .colors[0] = BLEND_DEFAULT,
-            .label     = XVG_LABEL("xvg-shapes-pipeline")});
+        xvg->shapes.pip =
+            sg_make_pipeline(&(sg_pipeline_desc){.shader = sg_make_shader(_xvg_shapes_shader_desc(sg_query_backend())),
+                                                 .colors[0] = BLEND_DEFAULT,
+                                                 .label     = XVG_LABEL("xvg-shapes-pipeline")});
 
         xvg->shapes.sbo = sg_make_buffer(&(sg_buffer_desc){
             .usage.storage_buffer = true,
@@ -1701,10 +1743,10 @@ void xvg_init(XVG* xvg)
             .storage_buffer = xvg->shapes.sbo,
         });
 
-        xvg->lines.pip = sg_make_pipeline(&(sg_pipeline_desc){
-            .shader    = sg_make_shader(_xvg_lines_shader_desc(sg_query_backend())),
-            .colors[0] = BLEND_DEFAULT,
-            .label     = XVG_LABEL("xvg-line-pipeline")});
+        xvg->lines.pip =
+            sg_make_pipeline(&(sg_pipeline_desc){.shader = sg_make_shader(_xvg_lines_shader_desc(sg_query_backend())),
+                                                 .colors[0] = BLEND_DEFAULT,
+                                                 .label     = XVG_LABEL("xvg-line-pipeline")});
 
         xvg->lines.line_sbo = sg_make_buffer(&(sg_buffer_desc){
             .usage.storage_buffer = true,
@@ -1849,11 +1891,10 @@ void xvg_end_frame(XVG* xvg, int window_width, int window_height)
             sg_view_desc desc = sg_query_view_desc(atlas->img_view);
             sg_update_image(
                 desc.texture.image,
-                &(sg_image_data){
-                    .mip_levels[0] = {
-                        .ptr  = xvg->text.current_atlas.img_data,
-                        .size = XVG_ATLAS_HEIGHT * XVG_ATLAS_ROW_STRIDE,
-                    }});
+                &(sg_image_data){.mip_levels[0] = {
+                                     .ptr  = xvg->text.current_atlas.img_data,
+                                     .size = XVG_ATLAS_HEIGHT * XVG_ATLAS_ROW_STRIDE,
+                                 }});
             atlas->dirty = false;
         }
     }
@@ -1874,6 +1915,18 @@ void xvg_end_frame(XVG* xvg, int window_width, int window_height)
         case XVG_CMD_END_PASS:
             sg_end_pass();
             break;
+        case XVG_CMD_SET_SCISSOR:
+        {
+            XVGCommandSetScissor* s = cmd->payload.scissor;
+            sg_apply_scissor_rect(s->x, s->y, s->w, s->h, true);
+            break;
+        }
+        case XVG_CMD_SET_VIEWPORT:
+        {
+            XVGCommandSetViewport* s = cmd->payload.viewport;
+            sg_apply_viewport(s->x, s->y, s->w, s->h, true);
+            break;
+        }
         case XVG_CMD_CUSTOM:
         {
             XVGCommandCustom* custom = cmd->payload.custom;
