@@ -143,7 +143,8 @@ void main() {
     stroke_width = 2 * stroke_width / vw * uv_xy_scale.x;
 
     if (sdf_type == XVG_SHAPE_RECTANGLE_FILL ||
-        sdf_type == XVG_SHAPE_RECTANGLE_STROKE)
+        sdf_type == XVG_SHAPE_RECTANGLE_STROKE || 
+        sdf_type == XVG_SHAPE_LINE_PLOT)
     {
         borderradius_arcpie = (unpackUnorm4x8(vert.borderradius_arcpie) * 255) / vec4(vh * 0.5);        
     }
@@ -167,7 +168,8 @@ void main() {
         buffer_idx       = is_right ? buffer_idx_range.y : buffer_idx_range.x;
         buffer_begin_idx = int(buffer_idx_range.x);
         buffer_end_idx   = int(buffer_idx_range.y);
-        px_inc       = 2.0 / u_size.x;
+        px_inc       = 2.0 / u_size.y;
+        stroke_width = px_inc * sdf_data.w * 16;
     }
 
     if (grad_type == XVG_COLOUR_LINEAR_GRADIENT)
@@ -405,15 +407,12 @@ void main()
         line_y_prev = line_y_prev * 2 - 1;
         line_y_next = line_y_next * 2 - 1;
 
-        // TODO: scale to dimensions
-        vec2 stroke2 = vec2(stroke_width * uv_xy_scale);
-
-        float stroke_scale = 1 - stroke2.y;
-        // float stroke_scale = 0.5;
-
-        line_y      *= stroke_scale;
-        line_y_prev *= stroke_scale;
-        line_y_next *= stroke_scale;
+        // Technically makes the line less accurate, but it helps top half the stroke width getting cropped at the top & bottom edges of the rectangle. 
+        // Might remove later if this causes other issues...
+        float stroke_scale  = 1 - stroke_width;
+        line_y             *= stroke_scale;
+        line_y_prev        *= stroke_scale;
+        line_y_next        *= stroke_scale;
 
         // build points
         vec2 p = uv;
@@ -425,11 +424,19 @@ void main()
         float d2 = sdSegment(p, b, c);
         float d = min(d1, d2);
 
-        float shape_vertical   = smoothstep(stroke2.x, 0, abs(d));
-        float shape_horizontal = smoothstep(stroke2.y, 0, abs(line_y - p.y));
+        float shape_vertical   = smoothstep(stroke_width, 0, abs(d));
+        float shape_horizontal = smoothstep(stroke_width, 0, abs(line_y - p.y));
 
         shape = max(shape_vertical, shape_horizontal);
         shape = sqrt(shape); // gamma
+
+        // TODO crop with rounded rectange
+
+        vec2  crop_b = uv_xy_scale;
+        float crop_d = sdRoundBox(uv * uv_xy_scale, crop_b, borderradius_arcpie);
+        float crop_shape = smoothstep(feather, 0, crop_d + feather * 0.5);
+
+        shape *= crop_shape;
     }
 
     float t = 0;

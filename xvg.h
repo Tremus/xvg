@@ -11,7 +11,6 @@
 
 /*
 // TODO: increase max stroke width for line plots
-// TODO: rounded rectangle scissoring for line plots. Will require sdRoundBox()
 // TODO: support fallback fonts for missing glyphs
 // TODO: support intelligent batching of text when using multiple atlases
 */
@@ -366,9 +365,19 @@ void xvg_draw_arc(
 
 // 'data' is expected to be an array of 'width' length
 // 'data' is expected to contain normalised values where 0 == (y + height), and 1 == y
-// 'data' is allowed to go beyond [0-1], however you should consider using sg_apply_scissor_rect()
-// 'stroke_width' is limited to the range [1-2]
-void xvg_draw_line_plot(XVG* xvg, int x, int y, int w, int h, const float* data, float stroke_px, uint32_t col);
+// 'data' is allowed to go beyond [0-1], it will just get cropped
+// 'stroke_px' is limited to the range [1-2]
+// 'crop_border_radius' crops the line at the corners of the rectangle you're drawing
+void xvg_draw_line_plot(
+    XVG*         xvg,
+    int          x,
+    int          y,
+    int          w,
+    int          h,
+    const float* data,
+    float        crop_border_radius,
+    float        stroke_px,
+    uint32_t     col);
 
 // FONTS
 // These functions return font IDs. 0 is considered to be invalid
@@ -863,13 +872,6 @@ void xvg_draw_arc(
     };
 }
 
-// ██╗     ██╗███╗   ██╗███████╗███████╗
-// ██║     ██║████╗  ██║██╔════╝██╔════╝
-// ██║     ██║██╔██╗ ██║█████╗  ███████╗
-// ██║     ██║██║╚██╗██║██╔══╝  ╚════██║
-// ███████╗██║██║ ╚████║███████╗███████║
-// ╚══════╝╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝
-
 void xvg_draw_line_plot(
     XVG*         xvg,
     int          x,
@@ -877,6 +879,7 @@ void xvg_draw_line_plot(
     int          width,
     int          height,
     const float* data,
+    float        crop_br,
     float        stroke_width,
     uint32_t     colour)
 {
@@ -911,20 +914,13 @@ void xvg_draw_line_plot(
 
     xvg_shape_t* shape = _xvg_get_shape(xvg);
     *shape             = (xvg_shape_t){
-                    .topleft          = {x, y},
-                    .bottomright      = {x + width, y + height},
-                    .sdf_data         = _xvg_compress_sdf_data(XVG_SHAPE_LINE_PLOT, 0, feather, stroke_width),
-                    .colour1          = colour,
-                    .buffer_idx_range = line_buffer_range,
+                    .topleft             = {x, y},
+                    .bottomright         = {x + width, y + height},
+                    .sdf_data            = _xvg_compress_sdf_data(XVG_SHAPE_LINE_PLOT, 0, feather, stroke_width),
+                    .borderradius_arcpie = _xvg_compress_border_radius(crop_br, crop_br, crop_br, crop_br),
+                    .colour1             = colour,
+                    .buffer_idx_range    = line_buffer_range,
     };
-    // xvg->tile_buffer[xvg->tile_buffer_len++] = (xvg_line_tile_t){
-    //     .topleft          = {x, y},
-    //     .bottomright      = {x + width, y + height},
-    //     .buffer_begin_idx = xvg->line_buffer_len,
-    //     .buffer_end_idx   = end_idx,
-    //     .stroke_width     = stroke_width,
-    //     .colour           = colour,
-    // };
 
     xvg->line_buffer_len += N;
     xassert(xvg->line_buffer_len <= XVG_ARRLEN(xvg->line_buffer));
@@ -1719,10 +1715,10 @@ void xvg_init(XVG* xvg)
             .wrap_v        = SG_WRAP_CLAMP_TO_EDGE,
         });
 
-        xvg->shapes.pip =
-            sg_make_pipeline(&(sg_pipeline_desc){.shader = sg_make_shader(_xvg_shapes_shader_desc(sg_query_backend())),
-                                                 .colors[0] = BLEND_DEFAULT,
-                                                 .label     = XVG_LABEL("xvg-shapes-pipeline")});
+        xvg->shapes.pip = sg_make_pipeline(&(sg_pipeline_desc){
+            .shader    = sg_make_shader(_xvg_shapes_shader_desc(sg_query_backend())),
+            .colors[0] = BLEND_DEFAULT,
+            .label     = XVG_LABEL("xvg-shapes-pipeline")});
 
         xvg->shapes.sbo = sg_make_buffer(&(sg_buffer_desc){
             .usage.storage_buffer = true,
@@ -1862,10 +1858,11 @@ void xvg_end_frame(XVG* xvg, int window_width, int window_height)
             sg_view_desc desc = sg_query_view_desc(atlas->img_view);
             sg_update_image(
                 desc.texture.image,
-                &(sg_image_data){.mip_levels[0] = {
-                                     .ptr  = xvg->text.current_atlas.img_data,
-                                     .size = XVG_ATLAS_HEIGHT * XVG_ATLAS_ROW_STRIDE,
-                                 }});
+                &(sg_image_data){
+                    .mip_levels[0] = {
+                        .ptr  = xvg->text.current_atlas.img_data,
+                        .size = XVG_ATLAS_HEIGHT * XVG_ATLAS_ROW_STRIDE,
+                    }});
             atlas->dirty = false;
         }
     }
