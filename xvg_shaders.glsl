@@ -34,6 +34,9 @@ struct xvg_shape
 
     uint buffer_idx_range; // unorm2x16
     // uint  texid; // ???
+
+    uint texcoords_xy; // unorm2x16
+    uint texcoords_wh; // unorm2x16
 };
 
 layout(binding=0) readonly buffer vs_xvg_shapes_buffer {
@@ -42,6 +45,7 @@ layout(binding=0) readonly buffer vs_xvg_shapes_buffer {
 
 layout(binding=0) uniform vs_xvg_shapes_uniforms {
     vec2 u_size;
+    vec2 u_texture_size;
     int  u_storage_buffer_offset;
 };
 
@@ -78,6 +82,7 @@ out flat vec2 gradient_a;
 // conic_gradient_angle
 // inner_shadow_blur_radius
 out flat vec2 gradient_b;
+out vec2 texcoord;
 
 #define XVG_SHAPE_RECTANGLE_FILL   1
 #define XVG_SHAPE_RECTANGLE_STROKE 2
@@ -96,6 +101,7 @@ out flat vec2 gradient_b;
 #define XVG_COLOUR_RADIAL_GRADIENT 2
 #define XVG_COLOUR_CONIC_GRADIENT  3
 #define XVG_COLOUR_BOX_GRADIENT    4
+#define XVG_COLOUR_TEXTURE         5
 
 void main() {
     uint v_idx = gl_VertexIndex / 6u;
@@ -192,17 +198,31 @@ void main() {
         gradient_a = vec2(vert.gradient_a) / vec2(-vw, vh); // translate x/y
         gradient_b = vec2(vert.gradient_b     / vh);        // blur radius
     }
+
+    // TODO: divide by texture size
+    vec2 texcoords_xy = unpackUnorm2x16(vert.texcoords_xy) * vec2(65535);
+    vec2 texcoords_rb = unpackUnorm2x16(vert.texcoords_wh) * vec2(65535) + texcoords_xy;
+
+    texcoords_xy = texcoords_xy / u_texture_size;
+    texcoords_rb = texcoords_rb / u_texture_size;
+
+    texcoord = vec2(
+        is_right  ? texcoords_rb.x : texcoords_xy.x,
+        is_bottom ? texcoords_rb.y : texcoords_xy.y
+    );
 }
 @end
 
 @fs fs_xvg_shapes
 precision mediump float;
+layout(binding=2) uniform texture2D fs_xvg_shapes_tex;
+layout(binding=0) uniform sampler fs_xvg_shapes_smp;
 
 struct xvg_line_segment {
     float y;
 };
 
-layout(binding=1) readonly buffer fs_xvg_line_buffer {
+layout(binding=1) readonly buffer fs_xvg_shapes_line_buffer {
     xvg_line_segment line_buffer[];
 };
 
@@ -226,6 +246,7 @@ in flat float px_inc;
 
 in flat vec2 gradient_a;
 in flat vec2 gradient_b;
+in vec2 texcoord;
 
 out vec4 frag_color;
 
@@ -247,6 +268,7 @@ out vec4 frag_color;
 #define XVG_COLOUR_RADIAL_GRADIENT 2
 #define XVG_COLOUR_CONIC_GRADIENT  3
 #define XVG_COLOUR_BOX_GRADIENT    4
+#define XVG_COLOUR_TEXTURE         5
 
 // The MIT License
 // Copyright © 2017 Inigo Quilez
@@ -312,7 +334,7 @@ float sdSegment(in vec2 p, in vec2 a, in vec2 b)
 void main()
 {
     float shape = 1;
-    vec4 col = vec4(0);
+    vec4 col = vec4(1);
     if (sdf_type == XVG_SHAPE_RECTANGLE_FILL)
     {
         vec2 b = uv_xy_scale;
@@ -487,7 +509,11 @@ void main()
         t = 1 - d / (blur_radius * 2);
         t = clamp(t, 0, 1);
     }
-    col = mix(unpackUnorm4x8(colour1).abgr, unpackUnorm4x8(colour2).abgr, t);
+    if (grad_type == XVG_COLOUR_TEXTURE)
+    {
+        col = texture(sampler2D(fs_xvg_shapes_tex, fs_xvg_shapes_smp), texcoord);
+    }
+    col *= mix(unpackUnorm4x8(colour1).abgr, unpackUnorm4x8(colour2).abgr, t);
 
     col.a *= shape;
     // col = shape == 0 ? (vec4(1) - col) : col;

@@ -63,6 +63,7 @@ typedef enum XVGColourType
     XVG_COLOUR_RADIAL_GRADIENT,
     XVG_COLOUR_CONIC_GRADIENT,
     XVG_COLOUR_BOX_GRADIENT,
+    XVG_COLOUR_TEXTURE,
 } XVGColourType;
 
 // Text alignment flags
@@ -226,9 +227,12 @@ typedef struct XVG
 
     struct
     {
-        int     shape_buffer_start;
+        int        shape_buffer_start;
+        sg_view    shape_texture;
+        sg_sampler shape_sampler;
+
         int     text_buffer_start;
-        sg_view texture;
+        sg_view text_texture;
     } draw_start;
 
     float backingScaleFactor;
@@ -242,8 +246,8 @@ typedef struct XVG
         sg_buffer   sbo;
         sg_view     sbv;
 
-        sg_buffer line_sbo; // normalised y values
         sg_view   line_sbv;
+        sg_buffer line_sbo; // normalised y values
     } shapes;
 
     // Text pipeline
@@ -321,6 +325,10 @@ typedef struct XVGGradient
     uint32_t      colour2;
     float         gradient_a[2];
     float         gradient_b[2];
+
+    uint32_t   xy, wh;
+    sg_view    texture;
+    sg_sampler sampler;
 } XVGGradient;
 
 XVGGradient xvg_make_linear_gradient(uint32_t col_1, uint32_t col_2, float x_1, float y_1, float x_2, float y_2);
@@ -332,6 +340,9 @@ XVGGradient xvg_make_conic_gradient(uint32_t col_1, uint32_t col_2, float angle_
 
 XVGGradient
 xvg_make_inner_shadow(uint32_t col_outer, uint32_t col_inner, float x_translate, float y_translate, float blur_radius);
+
+// x/y/w/h are the coords of the image getting sampled
+XVGGradient xvg_make_image_fill(sg_view texture, sg_sampler sampler, uint32_t x, uint32_t y, uint32_t w, uint32_t h);
 
 void xvg_draw_rectangle(XVG* xvg, float x, float y, float w, float h, float br, float stroke_px, uint32_t col);
 
@@ -418,11 +429,13 @@ typedef struct XVGCommandSetScissor XVGCommandSetViewport;
 
 typedef struct XVGCommandDraw
 {
-    int     shape_buffer_start;
-    int     shape_buffer_end;
-    int     text_buffer_start;
-    int     text_buffer_end;
-    sg_view texture;
+    int        shape_buffer_start;
+    int        shape_buffer_end;
+    sg_view    shape_texture;
+    sg_sampler shape_sampler;
+    int        text_buffer_start;
+    int        text_buffer_end;
+    sg_view    text_texture;
 } XVGCommandDraw;
 
 typedef void (*XVGCustomFunc)(void* uptr);
@@ -641,16 +654,20 @@ void xvg_command_batch_draw(XVG* xvg, const char* label)
     cmd->payload.draw    = draw;
 
     draw->shape_buffer_start = xvg->draw_start.shape_buffer_start;
-    draw->text_buffer_start  = xvg->draw_start.text_buffer_start;
+    draw->shape_buffer_end   = xvg->shapes_buffer_len;
+    draw->shape_texture =
+        xvg->draw_start.shape_texture.id ? xvg->draw_start.shape_texture : xvg->text.atlases[0].img_view;
+    draw->shape_sampler = xvg->draw_start.shape_sampler.id ? xvg->draw_start.shape_sampler : xvg->smp_linear;
 
-    draw->shape_buffer_end = xvg->shapes_buffer_len;
-    draw->text_buffer_end  = xvg->text_buffer_len;
-
-    draw->texture = xvg->draw_start.texture;
+    draw->text_buffer_start = xvg->draw_start.text_buffer_start;
+    draw->text_buffer_end   = xvg->text_buffer_len;
+    draw->text_texture      = xvg->draw_start.text_texture;
 
     xvg->draw_start.shape_buffer_start = xvg->shapes_buffer_len;
+    xvg->draw_start.shape_texture.id   = 0;
+    xvg->draw_start.shape_sampler.id   = 0;
     xvg->draw_start.text_buffer_start  = xvg->text_buffer_len;
-    xvg->draw_start.texture.id         = 0;
+    xvg->draw_start.text_texture.id    = 0;
 }
 
 void xvg_command_custom(XVG* xvg, void* uptr, XVGCustomFunc func, const char* label)
@@ -751,6 +768,19 @@ XVGGradient xvg_make_inner_shadow(
     };
 }
 
+// x/y/w/h are the coords of the image getting sampled
+XVGGradient xvg_make_image_fill(sg_view texture, sg_sampler sampler, uint32_t x, uint32_t y, uint32_t w, uint32_t h)
+{
+    return (XVGGradient){
+        .type    = XVG_COLOUR_TEXTURE,
+        .xy      = x | (y << 16),
+        .wh      = w | (h << 16),
+        .texture = texture,
+        .sampler = sampler,
+        .colour1 = 0xffffffff,
+    };
+}
+
 void xvg_draw_circle(XVG* xvg, float cx, float cy, float radius_px, float stroke_width, uint32_t colour)
 {
     XVGShapeType shape_type = stroke_width > 0 ? XVG_SHAPE_CIRCLE_STROKE : XVG_SHAPE_CIRCLE_FILL;
@@ -782,6 +812,15 @@ void xvg_draw_rectangle(XVG* xvg, float x, float y, float w, float h, float br, 
 
 void xvg_draw_rectangle_with_gradient(XVG* xvg, float x, float y, float w, float h, float br, XVGGradient grad)
 {
+    bool replace_texture = grad.texture.id && xvg->draw_start.shape_texture.id != grad.texture.id;
+    bool replace_sampler = grad.sampler.id && xvg->draw_start.shape_sampler.id != grad.sampler.id;
+    if (replace_texture || replace_sampler)
+    {
+        xvg_command_batch_draw(xvg, XVG_LABEL("xvg_draw_rectangle_with_gradient"));
+        xvg->draw_start.shape_texture = grad.texture;
+        xvg->draw_start.shape_sampler = grad.sampler;
+    }
+
     float feather = 4.0f / xm_minf(w, h);
 
     xvg_shape_t* shape = _xvg_get_shape(xvg);
@@ -791,10 +830,12 @@ void xvg_draw_rectangle_with_gradient(XVG* xvg, float x, float y, float w, float
                     .sdf_data            = _xvg_compress_sdf_data(XVG_SHAPE_ROUNDED_RECTANGLE_FILL, grad.type, feather, 0),
                     .borderradius_arcpie = _xvg_compress_border_radius(br, br, br, br),
 
-                    .colour1    = grad.colour1,
-                    .colour2    = grad.colour2,
-                    .gradient_a = {grad.gradient_a[0], grad.gradient_a[1]},
-                    .gradient_b = {grad.gradient_b[0], grad.gradient_b[1]},
+                    .colour1      = grad.colour1,
+                    .colour2      = grad.colour2,
+                    .gradient_a   = {grad.gradient_a[0], grad.gradient_a[1]},
+                    .gradient_b   = {grad.gradient_b[0], grad.gradient_b[1]},
+                    .texcoords_xy = grad.xy,
+                    .texcoords_wh = grad.wh,
     };
 }
 
@@ -1205,9 +1246,9 @@ bool _xvg_push_glyph(XVG* xvg, int pen_x, int pen_y, const XVGAtlasRect* rect, u
     XVG_ASSERT(should_push);
     if (should_push)
     {
-        if (xvg->draw_start.texture.id == 0)
-            xvg->draw_start.texture = rect->img_view;
-        if (xvg->draw_start.texture.id != rect->img_view.id)
+        if (xvg->draw_start.text_texture.id == 0)
+            xvg->draw_start.text_texture = rect->img_view;
+        if (xvg->draw_start.text_texture.id != rect->img_view.id)
             xvg_command_batch_draw(xvg, XVG_LABEL("_xvg_push_glyph"));
 
         xvg_text_t* obj   = _xvg_get_text(xvg);
@@ -1912,12 +1953,20 @@ void xvg_end_frame(XVG* xvg, int window_width, int window_height)
                 sg_apply_pipeline(xvg->shapes.pip);
 
                 sg_apply_bindings(&(sg_bindings){
-                    .views[VIEW_vs_xvg_shapes_buffer] = xvg->shapes.sbv,
-                    .views[VIEW_fs_xvg_line_buffer]   = xvg->shapes.line_sbv,
+                    .views[VIEW_vs_xvg_shapes_buffer]      = xvg->shapes.sbv,
+                    .views[VIEW_fs_xvg_shapes_line_buffer] = xvg->shapes.line_sbv,
+                    .views[VIEW_fs_xvg_shapes_tex]         = draw->shape_texture,
+                    .samplers[SMP_fs_xvg_shapes_smp]       = draw->shape_sampler,
                 });
-                vs_xvg_shapes_uniforms_t uniforms = {
-                    .u_size                  = {window_width, window_height},
-                    .u_storage_buffer_offset = draw->shape_buffer_start,
+
+                sg_view_desc             view_desc  = sg_query_view_desc(draw->shape_texture);
+                sg_image_desc            img_desc   = sg_query_image_desc(view_desc.texture.image);
+                unsigned                 img_width  = img_desc.width;
+                unsigned                 img_height = img_desc.height;
+                vs_xvg_shapes_uniforms_t uniforms   = {
+                      .u_size                  = {window_width, window_height},
+                      .u_texture_size          = {img_width, img_height},
+                      .u_storage_buffer_offset = draw->shape_buffer_start,
                 };
                 sg_apply_uniforms(UB_vs_xvg_shapes_uniforms, &SG_RANGE(uniforms));
                 sg_draw(0, num_shapes * 6, 1);
@@ -1927,11 +1976,11 @@ void xvg_end_frame(XVG* xvg, int window_width, int window_height)
             XVG_ASSERT(num_text >= 0);
             if (num_text)
             {
-                XVG_ASSERT(draw->texture.id != 0); // You forgot to set the current texture
+                XVG_ASSERT(draw->text_texture.id != 0); // You forgot to set the current texture
                 sg_apply_pipeline(xvg->text.pip);
                 sg_apply_bindings(&(sg_bindings){
                     .views[VIEW_vs_xvg_text_buffer] = xvg->text.sbv,
-                    .views[VIEW_fs_xvg_text_tex]    = draw->texture,
+                    .views[VIEW_fs_xvg_text_tex]    = draw->text_texture,
                     .samplers[SMP_fs_xvg_text_smp]  = xvg->smp_nearest_neighbour,
                 });
 
