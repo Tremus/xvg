@@ -63,7 +63,6 @@ typedef enum XVGColourType
     XVG_COLOUR_RADIAL_GRADIENT,
     XVG_COLOUR_CONIC_GRADIENT,
     XVG_COLOUR_BOX_GRADIENT,
-    XVG_COLOUR_TEXTURE,
 } XVGColourType;
 
 // Text alignment flags
@@ -239,6 +238,8 @@ typedef struct XVG
 
     sg_sampler smp_linear;
     sg_sampler smp_nearest_neighbour;
+    sg_image   fallback_img;
+    sg_view    fallback_img_view;
 
     struct
     {
@@ -342,7 +343,18 @@ XVGGradient
 xvg_make_inner_shadow(uint32_t col_outer, uint32_t col_inner, float x_translate, float y_translate, float blur_radius);
 
 // x/y/w/h are the coords of the image getting sampled
-XVGGradient xvg_make_image_fill(sg_view texture, sg_sampler sampler, uint32_t x, uint32_t y, uint32_t w, uint32_t h);
+// Saturation can be applied to change the colour of the image, inluding the opacity ie. ffffff7f (50% opacity)
+XVGGradient
+xvg_make_image_fill(sg_view texture, sg_sampler sampler, uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t sat);
+
+void xvg_gradient_apply_image(
+    XVGGradient* grad,
+    sg_view      texture,
+    sg_sampler   sampler,
+    uint32_t     x,
+    uint32_t     y,
+    uint32_t     w,
+    uint32_t     h);
 
 void xvg_draw_rectangle(XVG* xvg, float x, float y, float w, float h, float br, float stroke_px, uint32_t col);
 
@@ -655,9 +667,8 @@ void xvg_command_batch_draw(XVG* xvg, const char* label)
 
     draw->shape_buffer_start = xvg->draw_start.shape_buffer_start;
     draw->shape_buffer_end   = xvg->shapes_buffer_len;
-    draw->shape_texture =
-        xvg->draw_start.shape_texture.id ? xvg->draw_start.shape_texture : xvg->text.atlases[0].img_view;
-    draw->shape_sampler = xvg->draw_start.shape_sampler.id ? xvg->draw_start.shape_sampler : xvg->smp_linear;
+    draw->shape_texture = xvg->draw_start.shape_texture.id ? xvg->draw_start.shape_texture : xvg->fallback_img_view;
+    draw->shape_sampler = xvg->draw_start.shape_sampler.id ? xvg->draw_start.shape_sampler : xvg->smp_nearest_neighbour;
 
     draw->text_buffer_start = xvg->draw_start.text_buffer_start;
     draw->text_buffer_end   = xvg->text_buffer_len;
@@ -768,16 +779,33 @@ XVGGradient xvg_make_inner_shadow(
     };
 }
 
-// x/y/w/h are the coords of the image getting sampled
-XVGGradient xvg_make_image_fill(sg_view texture, sg_sampler sampler, uint32_t x, uint32_t y, uint32_t w, uint32_t h)
+void xvg_gradient_apply_image(
+    XVGGradient* grad,
+    sg_view      texture,
+    sg_sampler   sampler,
+    uint32_t     x,
+    uint32_t     y,
+    uint32_t     w,
+    uint32_t     h)
 {
+    grad->xy      = x | (y << 16);
+    grad->wh      = w | (h << 16);
+    grad->texture = texture;
+    grad->sampler = sampler;
+}
+
+// x/y/w/h are the coords of the image getting sampled
+XVGGradient
+xvg_make_image_fill(sg_view texture, sg_sampler sampler, uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t sat)
+{
+    XVG_ASSERT(texture.id);
+    XVG_ASSERT(sampler.id);
     return (XVGGradient){
-        .type    = XVG_COLOUR_TEXTURE,
         .xy      = x | (y << 16),
         .wh      = w | (h << 16),
         .texture = texture,
         .sampler = sampler,
-        .colour1 = 0xffffffff,
+        .colour1 = sat,
     };
 }
 
@@ -812,8 +840,8 @@ void xvg_draw_rectangle(XVG* xvg, float x, float y, float w, float h, float br, 
 
 void xvg_draw_rectangle_with_gradient(XVG* xvg, float x, float y, float w, float h, float br, XVGGradient grad)
 {
-    bool replace_texture = grad.texture.id && xvg->draw_start.shape_texture.id != grad.texture.id;
-    bool replace_sampler = grad.sampler.id && xvg->draw_start.shape_sampler.id != grad.sampler.id;
+    bool replace_texture = xvg->draw_start.shape_texture.id != grad.texture.id;
+    bool replace_sampler = xvg->draw_start.shape_sampler.id != grad.sampler.id;
     if (replace_texture || replace_sampler)
     {
         xvg_command_batch_draw(xvg, XVG_LABEL("xvg_draw_rectangle_with_gradient"));
@@ -1716,10 +1744,10 @@ void xvg_draw_text(
 
 void xvg_init(XVG* xvg)
 {
-    xvg->backingScaleFactor = 1;
-
     xvg->arena       = linked_arena_create_ex(0, 1024 * 64);
     xvg->frame_arena = linked_arena_create_ex(0, 1024 * 64);
+
+    xvg->backingScaleFactor = 1;
 
     static const sg_color_target_state BLEND_DEFAULT = {
         .write_mask = SG_COLORMASK_RGBA,
@@ -1755,6 +1783,19 @@ void xvg_init(XVG* xvg)
             .wrap_u        = SG_WRAP_CLAMP_TO_EDGE,
             .wrap_v        = SG_WRAP_CLAMP_TO_EDGE,
         });
+
+        // fallback_img
+        static const uint32_t pixel_white = 0xffffffff;
+
+        xvg->fallback_img      = sg_make_image(&(sg_image_desc){
+                 .width              = 1,
+                 .height             = 1,
+                 .pixel_format       = SG_PIXELFORMAT_RGBA8,
+                 .data.mip_levels[0] = {
+                     .ptr  = &pixel_white,
+                     .size = sizeof(pixel_white),
+            }});
+        xvg->fallback_img_view = sg_make_view(&(sg_view_desc){.texture = xvg->fallback_img});
 
         xvg->shapes.pip = sg_make_pipeline(&(sg_pipeline_desc){
             .shader    = sg_make_shader(_xvg_shapes_shader_desc(sg_query_backend())),
