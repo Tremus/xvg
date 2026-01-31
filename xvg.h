@@ -339,8 +339,13 @@ xvg_make_radial_gradient(uint32_t col_inner, uint32_t col_outer, float cx, float
 
 XVGGradient xvg_make_conic_gradient(uint32_t col_1, uint32_t col_2, float angle_1, float angle_2);
 
-XVGGradient
-xvg_make_inner_shadow(uint32_t col_outer, uint32_t col_inner, float x_translate, float y_translate, float blur_radius);
+XVGGradient xvg_make_inner_shadow(
+    uint32_t col_outer,
+    uint32_t col_inner,
+    float    x_translate,
+    float    y_translate,
+    float    radius,
+    float    spread);
 
 // x/y/w/h are the coords of the image getting sampled
 // Saturation can be applied to change the colour of the image, inluding the opacity ie. ffffff7f (50% opacity)
@@ -776,14 +781,15 @@ XVGGradient xvg_make_inner_shadow(
     uint32_t col_stop_inner,
     float    x_translate,
     float    y_translate,
-    float    blur_radius)
+    float    radius,
+    float    spread)
 {
     return (XVGGradient){
         .type       = XVG_COLOUR_BOX_GRADIENT, // TODO: convert this to inner shadow
         .colour1    = col_stop_outer,
         .colour2    = col_stop_inner,
         .gradient_a = {x_translate, y_translate},
-        .gradient_b = {blur_radius, blur_radius},
+        .gradient_b = {radius, spread},
     };
 }
 
