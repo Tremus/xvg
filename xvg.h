@@ -366,7 +366,6 @@ void xvg_gradient_apply_image(
     uint32_t     h);
 
 void xvg_draw_rectangle(XVG*, float x, float y, float w, float h, float br, float stroke_px, uint32_t col);
-
 void xvg_draw_rectangle_with_gradient(
     XVG*        xvg,
     float       x,
@@ -382,6 +381,15 @@ void xvg_draw_circle_with_gradient(XVG*, float cx, float cy, float radius_px, fl
 
 // Equilateral triangle
 void xvg_draw_triangle(XVG*, float x, float y, float w, float h, float rotate_rad, float stroke_px, uint32_t col);
+void xvg_draw_triangle_with_gradient(
+    XVG*        xvg,
+    float       x,
+    float       y,
+    float       w,
+    float       h,
+    float       rotate_radians,
+    float       stroke_width,
+    XVGGradient grad);
 
 void xvg_draw_pie(
     XVG*     xvg,
@@ -901,6 +909,34 @@ void xvg_draw_rectangle_with_gradient(
     };
 }
 
+void xvg_draw_triangle_with_gradient(
+    XVG*        xvg,
+    float       x,
+    float       y,
+    float       w,
+    float       h,
+    float       rotate_radians,
+    float       stroke_width,
+    XVGGradient grad)
+{
+    _xvg_set_texture(xvg, &grad);
+    XVGShapeType shape_type = stroke_width > 0 ? XVG_SHAPE_TRIANGLE_STROKE : XVG_SHAPE_TRIANGLE_FILL;
+    float        feather    = 4.0f / xm_minf(w, h);
+
+    xvg_shape_t* shape = _xvg_get_shape(xvg);
+    *shape             = (xvg_shape_t){
+                    .topleft             = {x, y},
+                    .bottomright         = {x + w, y + h},
+                    .sdf_data            = _xvg_compress_sdf_data(shape_type, grad.type, feather, stroke_width),
+                    .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(rotate_radians, 0),
+                    .colour1             = grad.colour1,
+                    .colour2             = grad.colour2,
+                    .gradient_a          = {grad.gradient_a[0], grad.gradient_a[1]},
+                    .gradient_b          = {grad.gradient_b[0], grad.gradient_b[1]},
+                    .texcoords_xy        = grad.xy,
+                    .texcoords_wh        = grad.wh,
+    };
+}
 void xvg_draw_triangle(
     XVG*     xvg,
     float    x,

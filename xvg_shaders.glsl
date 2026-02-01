@@ -510,6 +510,14 @@ void main()
             d = 1 - smoothstep(blur_radius * 4, 0, d - (blur_spread * 2));
             t = d;
         }
+        if (sdf_type == XVG_SHAPE_TRIANGLE_FILL)
+        {
+            vec2 p3 = vec2(p2.x * borderradius_arcpie.x - p2.y * borderradius_arcpie.y,
+                           p2.x * borderradius_arcpie.y + p2.y * borderradius_arcpie.x);
+            float d = sdEquilateralTriangle(p3, 0.86 - blur_radius*4 - blur_spread*4);
+            d = smoothstep(blur_radius * 4, 0, d + blur_radius*2);
+            t = d;
+        }
     }
     col *= mix(unpackUnorm4x8(colour1).abgr, unpackUnorm4x8(colour2).abgr, t);
 
