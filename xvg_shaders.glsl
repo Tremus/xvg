@@ -491,18 +491,6 @@ void main()
     }
     if (grad_type == XVG_COLOUR_BOX_GRADIENT)
     {
-        // vec2  xy_offset   = gradient_a;
-        // float blur_radius = gradient_b.x;
-        // float blur_spread = gradient_b.y;
-
-        // vec2 p2 = (p + xy_offset) * p_scale;
-        // vec4 br = borderradius_arcpie;
-
-        // float d = sdRoundBox(p2, p_scale - blur_spread*2, br);
-        // d = smoothstep(blur_radius*2, 0, d);
-        // t = sqrt(d);
-        // // t = d;
-
         vec2  xy_offset   = gradient_a;
         float blur_radius = gradient_b.x;
         float blur_spread = gradient_b.y;
@@ -510,8 +498,8 @@ void main()
         vec2 p2 = (p + xy_offset) * p_scale;
         vec4 br = borderradius_arcpie;
 
-        float d = sdRoundBox(p2, p_scale-blur_spread, br);
-        d = smoothstep(blur_radius*2, 0, d+blur_radius);
+        float d = sdRoundBox(p2, p_scale-blur_radius*2-blur_spread*2, br);
+        d = smoothstep(blur_radius*4, 0, d+blur_radius*2);
         t = d;
     }
     col *= mix(unpackUnorm4x8(colour1).abgr, unpackUnorm4x8(colour2).abgr, t);
