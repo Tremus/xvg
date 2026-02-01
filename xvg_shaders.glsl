@@ -401,7 +401,7 @@ void main()
     {
         vec2 uv_rotated = vec2(p.x * borderradius_arcpie.x - p.y * borderradius_arcpie.y,
                                p.x * borderradius_arcpie.y + p.y * borderradius_arcpie.x);
-        float d = sdArc(uv_rotated, borderradius_arcpie.zw, 1.0 - stroke_width * 0.5, stroke_width * 0.5);
+        float d = sdArc(uv_rotated, borderradius_arcpie.zw, 1.0 - stroke_width, stroke_width);
         float outer = smoothstep(feather, 0, d + feather * 0.5);
         shape = outer;
     }
@@ -409,7 +409,7 @@ void main()
     {
         vec2 uv_rotated = vec2(p.x * borderradius_arcpie.x - p.y * borderradius_arcpie.y,
                                p.x * borderradius_arcpie.y + p.y * borderradius_arcpie.x);
-        float d = sdRing(uv_rotated, borderradius_arcpie.zw, 1.0 - stroke_width * 0.5, stroke_width);
+        float d = sdRing(uv_rotated, borderradius_arcpie.zw, 1.0 - stroke_width, stroke_width*2);
         float outer = smoothstep(feather, 0, d + feather * 0.5);
         shape = outer;
     }
@@ -526,6 +526,22 @@ void main()
                            p2.x * borderradius_arcpie.y + p2.y * borderradius_arcpie.x);
             float d = sdPie(p3, borderradius_arcpie.zw, 1 - blur_radius*2 - blur_spread*2);
             d = smoothstep(blur_radius * 4, 0, d+blur_radius*2);
+            t = d;
+        }
+        if (sdf_type == XVG_SHAPE_ARC_ROUND_STROKE)
+        {
+            vec2 p3 = vec2(p2.x * borderradius_arcpie.x - p2.y * borderradius_arcpie.y,
+                           p2.x * borderradius_arcpie.y + p2.y * borderradius_arcpie.x);
+            float d = sdArc(p3, borderradius_arcpie.zw, 1.0 - stroke_width-blur_radius*2- blur_spread*2, stroke_width);
+            d = smoothstep(blur_radius * 4, 0, d + blur_radius*2);
+            t = d;
+        }
+        if (sdf_type == XVG_SHAPE_ARC_BUTT_STROKE)
+        {
+            vec2 p3 = vec2(p2.x * borderradius_arcpie.x - p2.y * borderradius_arcpie.y,
+                           p2.x * borderradius_arcpie.y + p2.y * borderradius_arcpie.x);
+            float d = sdRing(p3, borderradius_arcpie.zw, 1.0 - stroke_width-blur_radius*2- blur_spread*2, stroke_width*2);
+            d = smoothstep(blur_radius * 4, 0, d + blur_radius*2);
             t = d;
         }
 

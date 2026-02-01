@@ -315,6 +315,7 @@ void xvg_end_frame(XVG*, int window_width, int window_height);
 // Shapes
 // Unlike canvas style APIs, there are no 'fill' and 'stroke' commands. If 'stroke_width' is 0 the shape is implicitly
 // filled. Values are in pixels. Stroking is done on the INSIDE of the shape, so you always get accurate widths
+// Strokes have a maximum width of 15 with 2 exceptions: lines (2px max), arcs (31px max)
 // 'radius' is in pixels
 // 'angle' and 'rotate' is in radians [-PI, PI]
 // Colours are in the highly unintuitive but highly readable ABGR format (0xffff007f is yellow, 50% opacity). This makes
@@ -1041,7 +1042,7 @@ void xvg_draw_arc_with_gradient(
     *shape             = (xvg_shape_t){
                     .topleft             = {cx - radius_px, cy - radius_px},
                     .bottomright         = {cx + radius_px, cy + radius_px},
-                    .sdf_data            = _xvg_compress_sdf_data(shape_type, grad.type, feather, stroke_width),
+                    .sdf_data            = _xvg_compress_sdf_data(shape_type, grad.type, feather, stroke_width * 0.5f),
                     .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(angle_rotate * 0.5f, angle_range * 0.5f),
                     .colour1             = grad.colour1,
                     .colour2             = grad.colour2,
@@ -1064,6 +1065,7 @@ void xvg_draw_arc(
     uint32_t colour)
 {
     XVGGradient grad = {.colour1 = colour};
+    xvg_draw_arc_with_gradient(xvg, cx, cy, radius_px, start_radians, end_radians, stroke_width, butt, grad);
 }
 
 void xvg_draw_line_plot(
