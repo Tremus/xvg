@@ -62,7 +62,7 @@ typedef enum XVGColourType
     XVG_COLOUR_LINEAR_GRADIENT,
     XVG_COLOUR_RADIAL_GRADIENT,
     XVG_COLOUR_CONIC_GRADIENT,
-    XVG_COLOUR_BOX_GRADIENT,
+    XVG_COLOUR_INNER_SHADOW,
 } XVGColourType;
 
 // Text alignment flags
@@ -309,7 +309,7 @@ void xvg_init(XVG*);
 void xvg_deinit(XVG*);
 
 void xvg_begin_frame(XVG*);
-void xvg_end_frame(XVG* xvg, int window_width, int window_height);
+void xvg_end_frame(XVG*, int window_width, int window_height);
 
 // Shapes
 // Unlike canvas style APIs, there are no 'fill' and 'stroke' commands. If 'stroke_width' is 0 the shape is implicitly
@@ -339,6 +339,10 @@ xvg_make_radial_gradient(uint32_t col_inner, uint32_t col_outer, float cx, float
 
 XVGGradient xvg_make_conic_gradient(uint32_t col_1, uint32_t col_2, float angle_1, float angle_2);
 
+// Shadows blur radius is on the inside of the shape.
+// Be sure to expand the area (w/h) by the radius value when drawing drop shadows
+// Be sure to expand the spread by (radius * -1) when drawing inner shadows
+// This will help you to maintain the correct shape proportions
 XVGGradient xvg_make_inner_shadow(
     uint32_t col_outer,
     uint32_t col_inner,
@@ -361,7 +365,7 @@ void xvg_gradient_apply_image(
     uint32_t     w,
     uint32_t     h);
 
-void xvg_draw_rectangle(XVG* xvg, float x, float y, float w, float h, float br, float stroke_px, uint32_t col);
+void xvg_draw_rectangle(XVG*, float x, float y, float w, float h, float br, float stroke_px, uint32_t col);
 
 void xvg_draw_rectangle_with_gradient(
     XVG*        xvg,
@@ -373,10 +377,11 @@ void xvg_draw_rectangle_with_gradient(
     float       stroke,
     XVGGradient grad);
 
-void xvg_draw_circle(XVG* xvg, float cx, float cy, float radius_px, float stroke_width, uint32_t col);
+void xvg_draw_circle(XVG*, float cx, float cy, float radius_px, float stroke_width, uint32_t col);
+void xvg_draw_circle_with_gradient(XVG*, float cx, float cy, float radius_px, float sw, XVGGradient grad);
 
 // Equilateral triangle
-void xvg_draw_triangle(XVG* xvg, float x, float y, float w, float h, float rotate_rad, float stroke_px, uint32_t col);
+void xvg_draw_triangle(XVG*, float x, float y, float w, float h, float rotate_rad, float stroke_px, uint32_t col);
 
 void xvg_draw_pie(
     XVG*     xvg,
@@ -422,19 +427,19 @@ void xvg_draw_line_plot(
 // 'font_filepath' is expected to be UTF8
 // Windows paths are expected to use backlashes ('\'), but forward probably wortk fine
 // This library takes ownership of the memory and frees it
-XVGFont xvg_add_font_from_path(XVG* xvg, const char* font_filepath);
+XVGFont xvg_add_font_from_path(XVG*, const char* font_filepath);
 // Same as above, except takes a file buffer, and now you're responsible for freeing the memory
 // Note this memory must remain valid until you call xvg_deinit()
-XVGFont xvg_add_font_from_memory(XVG* xvg, const void* font_data, size_t font_datalen);
+XVGFont xvg_add_font_from_memory(XVG*, const void* font_data, size_t font_datalen);
 
 // Sets active font to draw and create layouts with
-void xvg_set_font(XVG* xvg, XVGFont);
+void xvg_set_font(XVG*, XVGFont);
 
 void xvg_draw_text(
     XVG*        xvg,
     float       x,
     float       y,
-    const char* text_start,
+    const char* text_begin,
     const char* text_end,
     float       font_size,
     XVGAlign    align,
@@ -499,12 +504,12 @@ typedef struct XVGCommand
     struct XVGCommand* next;
 } XVGCommand;
 
-void xvg_command_begin_pass(XVG* xvg, const sg_pass*, const char* label);
-void xvg_command_end_pass(XVG* xvg, const char* label);
-void xvg_command_set_scissor(XVG* xvg, int x, int y, int w, int h, const char* label);
-void xvg_command_set_viewport(XVG* xvg, int x, int y, int w, int h, const char* label);
-void xvg_command_batch_draw(XVG* xvg, const char* label);
-void xvg_command_custom(XVG* xvg, void* uptr, XVGCustomFunc func, const char* label);
+void xvg_command_begin_pass(XVG*, const sg_pass*, const char* label);
+void xvg_command_end_pass(XVG*, const char* label);
+void xvg_command_set_scissor(XVG*, int x, int y, int w, int h, const char* label);
+void xvg_command_set_viewport(XVG*, int x, int y, int w, int h, const char* label);
+void xvg_command_batch_draw(XVG*, const char* label);
+void xvg_command_custom(XVG*, void* uptr, XVGCustomFunc func, const char* label);
 
 // #ifdef __cplusplus
 // }
@@ -785,7 +790,7 @@ XVGGradient xvg_make_inner_shadow(
     float    spread)
 {
     return (XVGGradient){
-        .type       = XVG_COLOUR_BOX_GRADIENT, // TODO: convert this to inner shadow
+        .type       = XVG_COLOUR_INNER_SHADOW, // TODO: convert this to inner shadow
         .colour1    = col_stop_outer,
         .colour2    = col_stop_inner,
         .gradient_a = {x_translate, y_translate},
@@ -823,18 +828,40 @@ xvg_make_image_fill(sg_view texture, sg_sampler sampler, uint32_t x, uint32_t y,
     };
 }
 
-void xvg_draw_circle(XVG* xvg, float cx, float cy, float radius_px, float stroke_width, uint32_t colour)
+void _xvg_set_texture(XVG* xvg, const XVGGradient* grad)
+{
+    bool replace_texture = xvg->draw_start.shape_texture.id != grad->texture.id;
+    bool replace_sampler = xvg->draw_start.shape_sampler.id != grad->sampler.id;
+    if (replace_texture || replace_sampler)
+    {
+        xvg_command_batch_draw(xvg, XVG_LABEL("_xvg_set_texture"));
+        xvg->draw_start.shape_texture = grad->texture;
+        xvg->draw_start.shape_sampler = grad->sampler;
+    }
+}
+
+void xvg_draw_circle_with_gradient(XVG* xvg, float cx, float cy, float radius_px, float stroke_width, XVGGradient grad)
 {
     XVGShapeType shape_type = stroke_width > 0 ? XVG_SHAPE_CIRCLE_STROKE : XVG_SHAPE_CIRCLE_FILL;
     float        feather    = 2.0f / radius_px;
 
     xvg_shape_t* shape = _xvg_get_shape(xvg);
     *shape             = (xvg_shape_t){
-                    .topleft     = {cx - radius_px, cy - radius_px},
-                    .bottomright = {cx + radius_px, cy + radius_px},
-                    .sdf_data    = _xvg_compress_sdf_data(shape_type, 0, feather, stroke_width),
-                    .colour1     = colour,
+                    .topleft      = {cx - radius_px, cy - radius_px},
+                    .bottomright  = {cx + radius_px, cy + radius_px},
+                    .sdf_data     = _xvg_compress_sdf_data(shape_type, grad.type, feather, stroke_width),
+                    .colour1      = grad.colour1,
+                    .colour2      = grad.colour2,
+                    .gradient_a   = {grad.gradient_a[0], grad.gradient_a[1]},
+                    .gradient_b   = {grad.gradient_b[0], grad.gradient_b[1]},
+                    .texcoords_xy = grad.xy,
+                    .texcoords_wh = grad.wh,
     };
+}
+void xvg_draw_circle(XVG* xvg, float cx, float cy, float radius_px, float stroke_width, uint32_t col)
+{
+    XVGGradient grad = {.colour1 = col};
+    xvg_draw_circle_with_gradient(xvg, cx, cy, radius_px, stroke_width, grad);
 }
 
 void xvg_draw_rectangle(XVG* xvg, float x, float y, float w, float h, float br, float stroke_width, uint32_t col)
@@ -853,14 +880,7 @@ void xvg_draw_rectangle_with_gradient(
     float       stroke_width,
     XVGGradient grad)
 {
-    bool replace_texture = xvg->draw_start.shape_texture.id != grad.texture.id;
-    bool replace_sampler = xvg->draw_start.shape_sampler.id != grad.sampler.id;
-    if (replace_texture || replace_sampler)
-    {
-        xvg_command_batch_draw(xvg, XVG_LABEL("xvg_draw_rectangle_with_gradient"));
-        xvg->draw_start.shape_texture = grad.texture;
-        xvg->draw_start.shape_sampler = grad.sampler;
-    }
+    _xvg_set_texture(xvg, &grad);
     XVGShapeType shape_type = stroke_width > 0 ? XVG_SHAPE_ROUNDED_RECTANGLE_STROKE : XVG_SHAPE_ROUNDED_RECTANGLE_FILL;
 
     float feather = 4.0f / xm_minf(w, h);
