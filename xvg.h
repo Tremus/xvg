@@ -62,6 +62,7 @@ typedef enum XVGColourType
     XVG_COLOUR_LINEAR_GRADIENT,
     XVG_COLOUR_RADIAL_GRADIENT,
     XVG_COLOUR_CONIC_GRADIENT,
+    XVG_COLOUR_DROP_SHADOW,
     XVG_COLOUR_INNER_SHADOW,
 } XVGColourType;
 
@@ -343,13 +344,15 @@ XVGGradient xvg_make_conic_gradient(uint32_t col_1, uint32_t col_2, float angle_
 // Be sure to expand the area (w/h) by the radius value when drawing drop shadows
 // Be sure to expand the spread by (radius * -1) when drawing inner shadows
 // This will help you to maintain the correct shape proportions
-XVGGradient xvg_make_inner_shadow(
+// If 'is_inner_shadow' is false, shadow is drop shadow
+XVGGradient xvg_make_shadow(
     uint32_t col_outer,
     uint32_t col_inner,
     float    x_translate,
     float    y_translate,
     float    radius,
-    float    spread);
+    float    spread,
+    bool     is_inner_shadow);
 
 // x/y/w/h are the coords of the image getting sampled
 // Saturation can be applied to change the colour of the image, inluding the opacity ie. ffffff7f (50% opacity)
@@ -400,6 +403,15 @@ void xvg_draw_pie(
     float    angle_end,
     float    stroke_px,
     uint32_t col);
+void xvg_draw_pie_with_gradient(
+    XVG*        xvg,
+    float       cx,
+    float       cy,
+    float       radius_px,
+    float       angle_start,
+    float       angle_end,
+    float       stroke_px,
+    XVGGradient grad);
 
 void xvg_draw_arc(
     XVG*     xvg,
@@ -411,6 +423,16 @@ void xvg_draw_arc(
     float    stroke_px,
     bool     butt,
     uint32_t col);
+void xvg_draw_arc_with_gradient(
+    XVG*        xvg,
+    float       cx,
+    float       cy,
+    float       radius_px,
+    float       angle_start,
+    float       angle_end,
+    float       stroke_px,
+    bool        butt,
+    XVGGradient grad);
 
 // 'data' is expected to be an array of 'width' length
 // 'data' is expected to contain normalised values where 0 == (y + height), and 1 == y
@@ -789,16 +811,17 @@ xvg_make_conic_gradient(uint32_t col_stop_1, uint32_t col_stop_2, float radians_
     };
 }
 
-XVGGradient xvg_make_inner_shadow(
+XVGGradient xvg_make_shadow(
     uint32_t col_stop_outer,
     uint32_t col_stop_inner,
     float    x_translate,
     float    y_translate,
     float    radius,
-    float    spread)
+    float    spread,
+    bool     is_inner_shadow)
 {
     return (XVGGradient){
-        .type       = XVG_COLOUR_INNER_SHADOW, // TODO: convert this to inner shadow
+        .type       = is_inner_shadow ? XVG_COLOUR_INNER_SHADOW : XVG_COLOUR_DROP_SHADOW,
         .colour1    = col_stop_outer,
         .colour2    = col_stop_inner,
         .gradient_a = {x_translate, y_translate},
@@ -947,16 +970,38 @@ void xvg_draw_triangle(
     float    stroke_width,
     uint32_t colour)
 {
-    XVGShapeType shape_type = stroke_width > 0 ? XVG_SHAPE_TRIANGLE_STROKE : XVG_SHAPE_TRIANGLE_FILL;
-    float        feather    = 4.0f / xm_minf(w, h);
+    XVGGradient grad = {.colour1 = colour};
+    xvg_draw_triangle_with_gradient(xvg, x, y, w, h, rotate_radians, stroke_width, grad);
+}
+
+void xvg_draw_pie_with_gradient(
+    XVG*        xvg,
+    float       cx,
+    float       cy,
+    float       radius_px,
+    float       start_radians,
+    float       end_radians,
+    float       stroke_width,
+    XVGGradient grad)
+{
+    _xvg_set_texture(xvg, &grad);
+    XVGShapeType shape_type   = stroke_width > 0 ? XVG_SHAPE_PIE_STROKE : XVG_SHAPE_PIE_FILL;
+    float        feather      = 2.0f / radius_px;
+    float        angle_range  = end_radians - start_radians;
+    float        angle_rotate = (end_radians + start_radians);
 
     xvg_shape_t* shape = _xvg_get_shape(xvg);
     *shape             = (xvg_shape_t){
-                    .topleft             = {x, y},
-                    .bottomright         = {x + w, y + h},
-                    .sdf_data            = _xvg_compress_sdf_data(shape_type, 0, feather, stroke_width),
-                    .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(rotate_radians, 0),
-                    .colour1             = colour,
+                    .topleft             = {cx - radius_px, cy - radius_px},
+                    .bottomright         = {cx + radius_px, cy + radius_px},
+                    .sdf_data            = _xvg_compress_sdf_data(shape_type, grad.type, feather, stroke_width),
+                    .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(angle_rotate * 0.5f, angle_range * 0.5f),
+                    .colour1             = grad.colour1,
+                    .colour2             = grad.colour2,
+                    .gradient_a          = {grad.gradient_a[0], grad.gradient_a[1]},
+                    .gradient_b          = {grad.gradient_b[0], grad.gradient_b[1]},
+                    .texcoords_xy        = grad.xy,
+                    .texcoords_wh        = grad.wh,
     };
 }
 
@@ -970,7 +1015,24 @@ void xvg_draw_pie(
     float    stroke_width,
     uint32_t colour)
 {
-    XVGShapeType shape_type   = stroke_width > 0 ? XVG_SHAPE_PIE_STROKE : XVG_SHAPE_PIE_FILL;
+    XVGGradient grad = {.colour1 = colour};
+    xvg_draw_pie_with_gradient(xvg, cx, cy, radius_px, start_radians, end_radians, stroke_width, grad);
+}
+
+void xvg_draw_arc_with_gradient(
+    XVG*        xvg,
+    float       cx,
+    float       cy,
+    float       radius_px,
+    float       start_radians,
+    float       end_radians,
+    float       stroke_width,
+    bool        butt,
+    XVGGradient grad)
+{
+    _xvg_set_texture(xvg, &grad);
+
+    XVGShapeType shape_type   = butt ? XVG_SHAPE_ARC_BUTT_STROKE : XVG_SHAPE_ARC_ROUND_STROKE;
     float        feather      = 2.0f / radius_px;
     float        angle_range  = end_radians - start_radians;
     float        angle_rotate = (end_radians + start_radians);
@@ -979,9 +1041,14 @@ void xvg_draw_pie(
     *shape             = (xvg_shape_t){
                     .topleft             = {cx - radius_px, cy - radius_px},
                     .bottomright         = {cx + radius_px, cy + radius_px},
-                    .sdf_data            = _xvg_compress_sdf_data(shape_type, 0, feather, stroke_width),
+                    .sdf_data            = _xvg_compress_sdf_data(shape_type, grad.type, feather, stroke_width),
                     .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(angle_rotate * 0.5f, angle_range * 0.5f),
-                    .colour1             = colour,
+                    .colour1             = grad.colour1,
+                    .colour2             = grad.colour2,
+                    .gradient_a          = {grad.gradient_a[0], grad.gradient_a[1]},
+                    .gradient_b          = {grad.gradient_b[0], grad.gradient_b[1]},
+                    .texcoords_xy        = grad.xy,
+                    .texcoords_wh        = grad.wh,
     };
 }
 
@@ -996,19 +1063,7 @@ void xvg_draw_arc(
     bool     butt,
     uint32_t colour)
 {
-    XVGShapeType shape_type   = butt ? XVG_SHAPE_ARC_BUTT_STROKE : XVG_SHAPE_ARC_ROUND_STROKE;
-    float        feather      = 2.0f / radius_px;
-    float        angle_range  = end_radians - start_radians;
-    float        angle_rotate = (end_radians + start_radians);
-
-    xvg_shape_t* shape = _xvg_get_shape(xvg);
-    *shape             = (xvg_shape_t){
-                    .topleft             = {cx - radius_px, cy - radius_px},
-                    .bottomright         = {cx + radius_px, cy + radius_px},
-                    .sdf_data            = _xvg_compress_sdf_data(shape_type, 0, feather, stroke_width),
-                    .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(angle_rotate * 0.5f, angle_range * 0.5f),
-                    .colour1             = colour,
-    };
+    XVGGradient grad = {.colour1 = colour};
 }
 
 void xvg_draw_line_plot(

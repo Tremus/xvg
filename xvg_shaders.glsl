@@ -101,7 +101,8 @@ out flat vec2 gradient_b;
 #define XVG_COLOUR_LINEAR_GRADIENT 1
 #define XVG_COLOUR_RADIAL_GRADIENT 2
 #define XVG_COLOUR_CONIC_GRADIENT  3
-#define XVG_COLOUR_INNER_SHADOW    4
+#define XVG_COLOUR_DROP_SHADOW     4
+#define XVG_COLOUR_INNER_SHADOW    5
 
 void main() {
     uint v_idx = gl_VertexIndex / 6u;
@@ -192,7 +193,7 @@ void main() {
         gradient_a = vec2(cos(vert.gradient_a.x), sin(vert.gradient_a.x)); // rotation, radians
         gradient_b = vert.gradient_b;                                      // range, radians
     }
-    if (grad_type == XVG_COLOUR_INNER_SHADOW)
+    if (grad_type == XVG_COLOUR_DROP_SHADOW || grad_type == XVG_COLOUR_INNER_SHADOW)
     {
         gradient_a = vert.gradient_a / vec2(-vw, vh); // translate x/y
         gradient_b = vert.gradient_b / vh;            // blur radius & spread
@@ -266,7 +267,8 @@ out vec4 frag_color;
 #define XVG_COLOUR_LINEAR_GRADIENT 1
 #define XVG_COLOUR_RADIAL_GRADIENT 2
 #define XVG_COLOUR_CONIC_GRADIENT  3
-#define XVG_COLOUR_INNER_SHADOW    4
+#define XVG_COLOUR_DROP_SHADOW     4
+#define XVG_COLOUR_INNER_SHADOW    5
 
 // The MIT License
 // Copyright © 2017 Inigo Quilez
@@ -489,7 +491,7 @@ void main()
         t = angle / (PI * 2) + 0.5;
         t = smoothstep(0, range, t);
     }
-    if (grad_type == XVG_COLOUR_INNER_SHADOW)
+    if (grad_type == XVG_COLOUR_DROP_SHADOW || grad_type == XVG_COLOUR_INNER_SHADOW)
     {
         vec2  xy_offset   = gradient_a;
         float blur_radius = gradient_b.x;
@@ -518,6 +520,18 @@ void main()
             d = smoothstep(blur_radius * 4, 0, d + blur_radius*2);
             t = d;
         }
+        if (sdf_type == XVG_SHAPE_PIE_FILL)
+        {
+            vec2 p3 = vec2(p2.x * borderradius_arcpie.x - p2.y * borderradius_arcpie.y,
+                           p2.x * borderradius_arcpie.y + p2.y * borderradius_arcpie.x);
+            float d = sdPie(p3, borderradius_arcpie.zw, 1 - blur_radius*2 - blur_spread*2);
+            d = smoothstep(blur_radius * 4, 0, d+blur_radius*2);
+            t = d;
+        }
+
+        // For very complex shapes, remove masking. This helps preseve blurred corners and divots
+        // For inner shadows, we want the masking
+        shape = grad_type == XVG_COLOUR_DROP_SHADOW ? 1 : shape;
     }
     col *= mix(unpackUnorm4x8(colour1).abgr, unpackUnorm4x8(colour2).abgr, t);
 
