@@ -53,6 +53,7 @@ typedef enum XVGShapeType
     XVG_SHAPE_PIE_STROKE,
     XVG_SHAPE_ARC_ROUND_STROKE,
     XVG_SHAPE_ARC_BUTT_STROKE,
+    XVG_SHAPE_LINE_ROUND, // TODO: butt?
     XVG_SHAPE_LINE_PLOT,
 } XVGShapeType;
 
@@ -369,6 +370,11 @@ void xvg_gradient_apply_image(
     uint32_t     w,
     uint32_t     h);
 
+// Hard corners, edges snapped to pixels. Horizontal and vertical only
+void xvg_draw_solid_rectangle(XVG*, int x, int y, int width, int height, unsigned col);
+void xvg_draw_solid_rectangle_with_gradient(XVG*, int x, int y, int width, int height, XVGGradient grad);
+
+// Soft corners & edges
 void xvg_draw_rectangle(XVG*, float x, float y, float w, float h, float br, float stroke_px, uint32_t col);
 void xvg_draw_rectangle_with_gradient(
     XVG*        xvg,
@@ -434,6 +440,9 @@ void xvg_draw_arc_with_gradient(
     float       stroke_px,
     bool        butt,
     XVGGradient grad);
+
+void xvg_draw_line_round_with_gradient(XVG*, float x0, float y0, float x1, float y1, float stroke, XVGGradient grad);
+void xvg_draw_line_round(XVG*, float x0, float y0, float x1, float y1, float stroke_width, unsigned col);
 
 // 'data' is expected to be an array of 'width' length
 // 'data' is expected to contain normalised values where 0 == (y + height), and 1 == y
@@ -860,13 +869,13 @@ xvg_make_image_fill(sg_view texture, sg_sampler sampler, uint32_t x, uint32_t y,
     };
 }
 
-void _xvg_set_texture(XVG* xvg, const XVGGradient* grad)
+void _xvg_set_bound_texture(XVG* xvg, const XVGGradient* grad)
 {
     bool replace_texture = xvg->draw_start.shape_texture.id != grad->texture.id;
     bool replace_sampler = xvg->draw_start.shape_sampler.id != grad->sampler.id;
     if (replace_texture || replace_sampler)
     {
-        xvg_command_batch_draw(xvg, XVG_LABEL("_xvg_set_texture"));
+        xvg_command_batch_draw(xvg, XVG_LABEL("_xvg_set_bound_texture"));
         xvg->draw_start.shape_texture = grad->texture;
         xvg->draw_start.shape_sampler = grad->sampler;
     }
@@ -896,6 +905,31 @@ void xvg_draw_circle(XVG* xvg, float cx, float cy, float radius_px, float stroke
     xvg_draw_circle_with_gradient(xvg, cx, cy, radius_px, stroke_width, grad);
 }
 
+void xvg_draw_solid_rectangle_with_gradient(XVG* xvg, int x, int y, int width, int height, XVGGradient grad)
+{
+    _xvg_set_bound_texture(xvg, &grad);
+
+    xvg_shape_t* shape = _xvg_get_shape(xvg);
+    *shape             = (xvg_shape_t){
+                    .topleft             = {x, y},
+                    .bottomright         = {x + width, y + height},
+                    .sdf_data            = _xvg_compress_sdf_data(XVG_SHAPE_RECTANGLE, grad.type, 0, 0),
+                    .borderradius_arcpie = 0,
+                    .colour1             = grad.colour1,
+                    .colour2             = grad.colour2,
+                    .gradient_a          = {grad.gradient_a[0], grad.gradient_a[1]},
+                    .gradient_b          = {grad.gradient_b[0], grad.gradient_b[1]},
+                    .texcoords_xy        = grad.xy,
+                    .texcoords_wh        = grad.wh,
+    };
+}
+
+void xvg_draw_solid_rectangle(XVG* xvg, int x, int y, int width, int height, unsigned col)
+{
+    XVGGradient grad = {.colour1 = col};
+    xvg_draw_solid_rectangle_with_gradient(xvg, x, y, width, height, grad);
+}
+
 void xvg_draw_rectangle(XVG* xvg, float x, float y, float w, float h, float br, float stroke_width, uint32_t col)
 {
     XVGGradient grad = {.colour1 = col};
@@ -912,7 +946,7 @@ void xvg_draw_rectangle_with_gradient(
     float       stroke_width,
     XVGGradient grad)
 {
-    _xvg_set_texture(xvg, &grad);
+    _xvg_set_bound_texture(xvg, &grad);
     XVGShapeType shape_type = stroke_width > 0 ? XVG_SHAPE_ROUNDED_RECTANGLE_STROKE : XVG_SHAPE_ROUNDED_RECTANGLE_FILL;
 
     float feather = 4.0f / xm_minf(w, h);
@@ -943,7 +977,7 @@ void xvg_draw_triangle_with_gradient(
     float       stroke_width,
     XVGGradient grad)
 {
-    _xvg_set_texture(xvg, &grad);
+    _xvg_set_bound_texture(xvg, &grad);
     XVGShapeType shape_type = stroke_width > 0 ? XVG_SHAPE_TRIANGLE_STROKE : XVG_SHAPE_TRIANGLE_FILL;
     float        feather    = 4.0f / xm_minf(w, h);
 
@@ -985,7 +1019,7 @@ void xvg_draw_pie_with_gradient(
     float       stroke_width,
     XVGGradient grad)
 {
-    _xvg_set_texture(xvg, &grad);
+    _xvg_set_bound_texture(xvg, &grad);
     XVGShapeType shape_type   = stroke_width > 0 ? XVG_SHAPE_PIE_STROKE : XVG_SHAPE_PIE_FILL;
     float        feather      = 2.0f / radius_px;
     float        angle_range  = end_radians - start_radians;
@@ -1031,7 +1065,7 @@ void xvg_draw_arc_with_gradient(
     bool        butt,
     XVGGradient grad)
 {
-    _xvg_set_texture(xvg, &grad);
+    _xvg_set_bound_texture(xvg, &grad);
 
     XVGShapeType shape_type   = butt ? XVG_SHAPE_ARC_BUTT_STROKE : XVG_SHAPE_ARC_ROUND_STROKE;
     float        feather      = 2.0f / radius_px;
@@ -1066,6 +1100,41 @@ void xvg_draw_arc(
 {
     XVGGradient grad = {.colour1 = colour};
     xvg_draw_arc_with_gradient(xvg, cx, cy, radius_px, start_radians, end_radians, stroke_width, butt, grad);
+}
+
+void xvg_draw_line_round_with_gradient(XVG* xvg, float x0, float y0, float x1, float y1, float stroke, XVGGradient grad)
+{
+    // stroke = xm_clampf(stroke, 1, 15);
+
+    float xl = xm_minf(x0, x1) - stroke * 6;
+    float xr = xm_maxf(x0, x1) + stroke * 6;
+    float yt = xm_minf(y0, y1) - stroke * 6;
+    float yb = xm_maxf(y0, y1) + stroke * 6;
+
+    float feather = 4.0f / xm_minf(xr - xl, yb - yt);
+    // float feather = 0.01f;
+
+    xvg_shape_t* shape = _xvg_get_shape(xvg);
+    *shape             = (xvg_shape_t){
+                    .topleft      = {xl, yt},
+                    .bottomright  = {xr, yb},
+                    .sdf_data     = _xvg_compress_sdf_data(XVG_SHAPE_LINE_ROUND, grad.type, feather, stroke * 0.5f),
+                    .colour1      = grad.colour1,
+                    .colour2      = grad.colour2,
+                    .gradient_a   = {grad.gradient_a[0], grad.gradient_a[1]},
+                    .gradient_b   = {grad.gradient_b[0], grad.gradient_b[1]},
+                    .texcoords_xy = grad.xy,
+                    .texcoords_wh = grad.wh,
+
+                    .pt0 = {x0, y0},
+                    .pt1 = {x1, y1},
+    };
+}
+
+void xvg_draw_line_round(XVG* xvg, float x0, float y0, float x1, float y1, float stroke_width, unsigned col)
+{
+    XVGGradient grad = {.colour1 = col};
+    xvg_draw_line_round_with_gradient(xvg, x0, y0, x1, y1, stroke_width, grad);
 }
 
 void xvg_draw_line_plot(

@@ -37,6 +37,10 @@ struct xvg_shape
 
     uint texcoords_xy; // unorm2x16
     uint texcoords_wh; // unorm2x16
+
+
+    vec2 pt0;
+    vec2 pt1;
 };
 
 layout(binding=0) readonly buffer vs_xvg_shapes_buffer {
@@ -95,7 +99,8 @@ out flat vec2 gradient_b;
 #define XVG_SHAPE_PIE_STROKE       8
 #define XVG_SHAPE_ARC_ROUND_STROKE 9
 #define XVG_SHAPE_ARC_BUTT_STROKE  10
-#define XVG_SHAPE_LINE_PLOT        11
+#define XVG_SHAPE_LINE_ROUND       11
+#define XVG_SHAPE_LINE_PLOT        12
 
 #define XVG_COLOUR_SOLID  0
 #define XVG_COLOUR_LINEAR_GRADIENT 1
@@ -145,8 +150,8 @@ void main() {
     sdf_type     = uint(sdf_data.x * 255);
     grad_type    = uint(sdf_data.y * 255);
     feather      =      sdf_data.z * 1;
-    stroke_width =      sdf_data.w * 16;
-    stroke_width = px_scale * 2 * stroke_width / vw;
+    float stroke_width_px =      sdf_data.w * 16;
+    stroke_width = px_scale * 2 * stroke_width_px / vw;
 
     if (sdf_type == XVG_SHAPE_RECTANGLE_FILL ||
         sdf_type == XVG_SHAPE_RECTANGLE_STROKE ||
@@ -165,6 +170,15 @@ void main() {
         vec2 arcpie   = 2 * PI * unpackUnorm2x16(vert.borderradius_arcpie);
         borderradius_arcpie.xy = vec2(cos(arcpie.x), sin(arcpie.x));
         borderradius_arcpie.zw = vec2(sin(arcpie.y), cos(arcpie.y));
+    }
+
+    if (sdf_type == XVG_SHAPE_LINE_ROUND)
+    {
+        borderradius_arcpie.xy = (vert.pt0 - vert.topleft) / vec2(vw, vh);
+        borderradius_arcpie.zw = (vert.pt1 - vert.topleft) / vec2(vw, vh);
+
+        borderradius_arcpie = 2 * borderradius_arcpie - 1;
+        borderradius_arcpie.yw = -borderradius_arcpie.yw;
     }
 
     if (sdf_type == XVG_SHAPE_LINE_PLOT)
@@ -234,7 +248,6 @@ in flat int buffer_begin_idx;
 in flat int buffer_end_idx;
 in flat float px_inc;
 
-
 in flat uint sdf_type;
 in flat uint grad_type;
 in flat float feather;
@@ -261,7 +274,8 @@ out vec4 frag_color;
 #define XVG_SHAPE_PIE_STROKE       8
 #define XVG_SHAPE_ARC_ROUND_STROKE 9
 #define XVG_SHAPE_ARC_BUTT_STROKE  10
-#define XVG_SHAPE_LINE_PLOT        11
+#define XVG_SHAPE_LINE_ROUND       11
+#define XVG_SHAPE_LINE_PLOT        12
 
 #define XVG_COLOUR_SOLID  0
 #define XVG_COLOUR_LINEAR_GRADIENT 1
@@ -382,36 +396,45 @@ void main()
     }
     if (sdf_type == XVG_SHAPE_PIE_FILL)
     {
-        vec2 uv_rotated = vec2(p.x * borderradius_arcpie.x - p.y * borderradius_arcpie.y,
-                               p.x * borderradius_arcpie.y + p.y * borderradius_arcpie.x);
-        float d = sdPie(uv_rotated, borderradius_arcpie.zw, 1.0);
+        vec2 p2 = vec2(p.x * borderradius_arcpie.x - p.y * borderradius_arcpie.y,
+                       p.x * borderradius_arcpie.y + p.y * borderradius_arcpie.x);
+        float d = sdPie(p2, borderradius_arcpie.zw, 1.0);
         float outer = smoothstep(feather, 0, d + feather * 0.5);
         shape = outer;
     }
     if (sdf_type == XVG_SHAPE_PIE_STROKE)
     {
-        vec2 uv_rotated = vec2(p.x * borderradius_arcpie.x - p.y * borderradius_arcpie.y,
-                               p.x * borderradius_arcpie.y + p.y * borderradius_arcpie.x);
-        float d = sdPie(uv_rotated, borderradius_arcpie.zw, 1.0);
+        vec2 p2 = vec2(p.x * borderradius_arcpie.x - p.y * borderradius_arcpie.y,
+                       p.x * borderradius_arcpie.y + p.y * borderradius_arcpie.x);
+        float d = sdPie(p2, borderradius_arcpie.zw, 1.0);
         float outer = smoothstep(feather, 0, d + feather * 0.5);
         float inner = smoothstep(feather, 0, d + feather * 0.5 + stroke_width);
         shape = outer - inner;
     }
     if (sdf_type == XVG_SHAPE_ARC_ROUND_STROKE)
     {
-        vec2 uv_rotated = vec2(p.x * borderradius_arcpie.x - p.y * borderradius_arcpie.y,
-                               p.x * borderradius_arcpie.y + p.y * borderradius_arcpie.x);
-        float d = sdArc(uv_rotated, borderradius_arcpie.zw, 1.0 - stroke_width, stroke_width);
+        vec2 p2 = vec2(p.x * borderradius_arcpie.x - p.y * borderradius_arcpie.y,
+                       p.x * borderradius_arcpie.y + p.y * borderradius_arcpie.x);
+        float d = sdArc(p2, borderradius_arcpie.zw, 1.0 - stroke_width, stroke_width);
         float outer = smoothstep(feather, 0, d + feather * 0.5);
         shape = outer;
     }
     if (sdf_type == XVG_SHAPE_ARC_BUTT_STROKE)
     {
-        vec2 uv_rotated = vec2(p.x * borderradius_arcpie.x - p.y * borderradius_arcpie.y,
-                               p.x * borderradius_arcpie.y + p.y * borderradius_arcpie.x);
-        float d = sdRing(uv_rotated, borderradius_arcpie.zw, 1.0 - stroke_width, stroke_width*2);
+        vec2 p2 = vec2(p.x * borderradius_arcpie.x - p.y * borderradius_arcpie.y,
+                       p.x * borderradius_arcpie.y + p.y * borderradius_arcpie.x);
+        float d = sdRing(p2, borderradius_arcpie.zw, 1.0 - stroke_width, stroke_width*2);
         float outer = smoothstep(feather, 0, d + feather * 0.5);
         shape = outer;
+    }
+    if (sdf_type == XVG_SHAPE_LINE_ROUND)
+    {
+        vec2 p2  = p * p_scale;
+        vec2 pt0 = borderradius_arcpie.xy * p_scale;
+        vec2 pt1 = borderradius_arcpie.zw * p_scale;
+        float d  = sdSegment(p2, pt0, pt1) - stroke_width;
+        d        = smoothstep(feather, 0, d + feather * 0.5);
+        shape = d;
     }
     if (sdf_type == XVG_SHAPE_LINE_PLOT)
     {
@@ -482,9 +505,9 @@ void main()
     {
         // Change start/end position of the gradient
         vec2 p2 = p * p_scale;
-        vec2 uv_rotated = vec2(p2.x * gradient_a.x - p2.y * gradient_a.y,
-                               p2.x * gradient_a.y + p2.y * gradient_a.x);
-        float angle = atan(uv_rotated.x, uv_rotated.y);
+        vec2 p3 = vec2(p2.x * gradient_a.x - p2.y * gradient_a.y,
+                       p2.x * gradient_a.y + p2.y * gradient_a.x);
+        float angle = atan(p3.x, p3.y);
 
         // Crops the gradient range
         float range = gradient_b.x;
