@@ -280,8 +280,8 @@ typedef struct XVG
         XVGFontSlot fonts[XVG_MAX_FONT_SLOTS];
 
 #ifndef XVG_GLYPH_ATLAS_SLOTS
-#define XVG_GLYPH_ATLAS_SLOTS 1
-// #define XVG_GLYPH_ATLAS_SLOTS 8
+// #define XVG_GLYPH_ATLAS_SLOTS 1
+#define XVG_GLYPH_ATLAS_SLOTS 8
 #endif // XVG_GLYPH_ATLAS_SLOTS
         XVGAtlas atlases[XVG_GLYPH_ATLAS_SLOTS];
 
@@ -484,6 +484,19 @@ void xvg_draw_text(
     float       font_size,
     XVGAlign    align,
     uint32_t    col);
+
+const XVGTextLayout* xvg_create_text_layout(
+    XVG*        xvg,
+    const char* text_start,
+    const char* text_end,
+    float       font_size,
+    float       break_width,
+    float       _line_height);
+static void xvg_release_text_layout(XVG* xvg, const XVGTextLayout* layout)
+{
+    linked_arena_release(xvg->arena, layout);
+};
+void xvg_draw_text_layout(XVG* xvg, const XVGTextLayout* layout, int x, int y, int alignment, uint32_t colour);
 
 // Commands
 typedef struct XVGCommandBeginPass
@@ -1903,7 +1916,6 @@ void xvg_draw_text_layout(XVG* xvg, const XVGTextLayout* layout, int x, int y, i
         }
     }
 }
-static void xvg_release_text_layout(XVG* xvg, const XVGTextLayout* layout) { linked_arena_release(xvg->arena, layout); }
 
 void xvg_draw_text_ex(
     XVG*        xvg,
