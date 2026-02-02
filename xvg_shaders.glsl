@@ -24,6 +24,7 @@ struct xvg_shape
     // packed with either:
     // - border radius (unorm4x8)
     // - arc/pie rotate and range (unorm2x16)
+    // - round line stroke offsets
     uint borderradius_arcpie;
 
     uint colour1;
@@ -37,10 +38,6 @@ struct xvg_shape
 
     uint texcoords_xy; // unorm2x16
     uint texcoords_wh; // unorm2x16
-
-
-    vec2 pt0;
-    vec2 pt1;
 };
 
 layout(binding=0) readonly buffer vs_xvg_shapes_buffer {
@@ -174,8 +171,19 @@ void main() {
 
     if (sdf_type == XVG_SHAPE_LINE_ROUND)
     {
-        borderradius_arcpie.xy = (vert.pt0 - vert.topleft) / vec2(vw, vh);
-        borderradius_arcpie.zw = (vert.pt1 - vert.topleft) / vec2(vw, vh);
+        vec4 fugg = unpackUnorm4x8(vert.borderradius_arcpie);
+        vec4 lmao = vec4(vert.topleft.x     + stroke_width_px * 2,
+                         vert.topleft.y     + stroke_width_px * 2,
+                         vert.bottomright.x - stroke_width_px * 2,
+                         vert.bottomright.y - stroke_width_px * 2);
+
+        borderradius_arcpie.x   = fugg.x == 0 ? lmao.x : lmao.z;
+        borderradius_arcpie.y   = fugg.y == 0 ? lmao.y : lmao.w;
+        borderradius_arcpie.z   = fugg.z == 0 ? lmao.x : lmao.z;
+        borderradius_arcpie.w   = fugg.w == 0 ? lmao.y : lmao.w;
+        borderradius_arcpie.xy -= vert.topleft;
+        borderradius_arcpie.zw -= vert.topleft;
+        borderradius_arcpie /= vec4(vw, vh, vw, vh);
 
         borderradius_arcpie = 2 * borderradius_arcpie - 1;
         borderradius_arcpie.yw = -borderradius_arcpie.yw;

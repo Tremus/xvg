@@ -316,7 +316,7 @@ void xvg_end_frame(XVG*, int window_width, int window_height);
 // Shapes
 // Unlike canvas style APIs, there are no 'fill' and 'stroke' commands. If 'stroke_width' is 0 the shape is implicitly
 // filled. Values are in pixels. Stroking is done on the INSIDE of the shape, so you always get accurate widths
-// Strokes have a maximum width of 15 with 2 exceptions: lines (2px max), arcs (31px max)
+// Strokes have a maximum width of 15 with 2 exceptions: line plots (2px max), arcs & rounded lines (31px max)
 // 'radius' is in pixels
 // 'angle' and 'rotate' is in radians [-PI, PI]
 // Colours are in the highly unintuitive but highly readable ABGR format (0xffff007f is yellow, 50% opacity). This makes
@@ -1111,20 +1111,25 @@ void xvg_draw_line_round_with_gradient(XVG* xvg, float x0, float y0, float x1, f
 
     float feather = 4.0f / (yb - yt);
 
+    xvecu stroke_offsets = {
+        .r = x0 > x1 ? 255 : 0,
+        .g = y0 > y1 ? 255 : 0,
+        .b = x0 > x1 ? 0 : 255,
+        .a = y0 > y1 ? 0 : 255,
+    };
+
     xvg_shape_t* shape = _xvg_get_shape(xvg);
     *shape             = (xvg_shape_t){
-                    .topleft      = {xl, yt},
-                    .bottomright  = {xr, yb},
-                    .sdf_data     = _xvg_compress_sdf_data(XVG_SHAPE_LINE_ROUND, grad.type, feather, stroke * 0.5f),
-                    .colour1      = grad.colour1,
-                    .colour2      = grad.colour2,
-                    .gradient_a   = {grad.gradient_a[0], grad.gradient_a[1]},
-                    .gradient_b   = {grad.gradient_b[0], grad.gradient_b[1]},
-                    .texcoords_xy = grad.xy,
-                    .texcoords_wh = grad.wh,
-
-                    .pt0 = {x0, y0},
-                    .pt1 = {x1, y1},
+                    .topleft             = {xl, yt},
+                    .bottomright         = {xr, yb},
+                    .sdf_data            = _xvg_compress_sdf_data(XVG_SHAPE_LINE_ROUND, grad.type, feather, stroke * 0.5f),
+                    .borderradius_arcpie = stroke_offsets.u32,
+                    .colour1             = grad.colour1,
+                    .colour2             = grad.colour2,
+                    .gradient_a          = {grad.gradient_a[0], grad.gradient_a[1]},
+                    .gradient_b          = {grad.gradient_b[0], grad.gradient_b[1]},
+                    .texcoords_xy        = grad.xy,
+                    .texcoords_wh        = grad.wh,
     };
 }
 
