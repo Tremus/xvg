@@ -567,6 +567,16 @@ void main()
             d = smoothstep(blur_radius * 4, 0, d + blur_radius*2);
             t = d;
         }
+        if (sdf_type == XVG_SHAPE_LINE_ROUND)
+        {
+            vec2 p3  = p * p_scale; // Don't apply translate to this positon
+            vec2 pt0 = (borderradius_arcpie.xy - xy_offset) * p_scale;
+            vec2 pt1 = (borderradius_arcpie.zw - xy_offset) * p_scale;
+
+            float d  = sdSegment(p3, pt0, pt1) - blur_spread - stroke_width;
+            d = smoothstep(blur_radius * 4, 0, d + blur_radius*2);
+            t = d;
+        }
 
         // For very complex shapes, remove masking. This helps preseve blurred corners and divots
         // For inner shadows, we want the masking

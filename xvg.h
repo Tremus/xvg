@@ -1104,15 +1104,12 @@ void xvg_draw_arc(
 
 void xvg_draw_line_round_with_gradient(XVG* xvg, float x0, float y0, float x1, float y1, float stroke, XVGGradient grad)
 {
-    // stroke = xm_clampf(stroke, 1, 15);
+    float xl = xm_minf(x0, x1) - stroke;
+    float xr = xm_maxf(x0, x1) + stroke;
+    float yt = xm_minf(y0, y1) - stroke;
+    float yb = xm_maxf(y0, y1) + stroke;
 
-    float xl = xm_minf(x0, x1) - stroke * 6;
-    float xr = xm_maxf(x0, x1) + stroke * 6;
-    float yt = xm_minf(y0, y1) - stroke * 6;
-    float yb = xm_maxf(y0, y1) + stroke * 6;
-
-    float feather = 4.0f / xm_minf(xr - xl, yb - yt);
-    // float feather = 0.01f;
+    float feather = 4.0f / (yb - yt);
 
     xvg_shape_t* shape = _xvg_get_shape(xvg);
     *shape             = (xvg_shape_t){
