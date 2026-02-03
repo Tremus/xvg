@@ -385,6 +385,18 @@ void xvg_draw_rectangle_with_gradient(
     float       br,
     float       stroke,
     XVGGradient grad);
+void xvg_draw_rectangle_with_gradient_ex(
+    XVG*        xvg,
+    float       x,
+    float       y,
+    float       w,
+    float       h,
+    float       br_tr,
+    float       br_br,
+    float       br_tl,
+    float       br_bl,
+    float       stroke,
+    XVGGradient grad);
 
 void xvg_draw_circle(XVG*, float cx, float cy, float radius_px, float stroke_width, uint32_t col);
 void xvg_draw_circle_with_gradient(XVG*, float cx, float cy, float radius_px, float sw, XVGGradient grad);
@@ -951,10 +963,45 @@ void xvg_draw_solid_rectangle(XVG* xvg, int x, int y, int width, int height, uns
     xvg_draw_solid_rectangle_with_gradient(xvg, x, y, width, height, grad);
 }
 
+void xvg_draw_rectangle_with_gradient_ex(
+    XVG*        xvg,
+    float       x,
+    float       y,
+    float       w,
+    float       h,
+    float       br_tr,
+    float       br_br,
+    float       br_tl,
+    float       br_bl,
+    float       stroke,
+    XVGGradient grad)
+{
+    _xvg_set_bound_texture(xvg, &grad);
+    XVGShapeType shape_type = stroke > 0 ? XVG_SHAPE_ROUNDED_RECTANGLE_STROKE : XVG_SHAPE_ROUNDED_RECTANGLE_FILL;
+
+    // float feather = 4.0f / xm_minf(w, h);
+    float feather = 4.0f / h;
+
+    xvg_shape_t* shape = _xvg_get_shape(xvg);
+    *shape             = (xvg_shape_t){
+                    .topleft             = {x, y},
+                    .bottomright         = {x + w, y + h},
+                    .sdf_data            = _xvg_compress_sdf_data(shape_type, grad.type, feather, stroke),
+                    .borderradius_arcpie = _xvg_compress_border_radius(br_tr, br_br, br_tl, br_bl),
+
+                    .colour1      = grad.colour1,
+                    .colour2      = grad.colour2,
+                    .gradient_a   = {grad.gradient_a[0], grad.gradient_a[1]},
+                    .gradient_b   = {grad.gradient_b[0], grad.gradient_b[1]},
+                    .texcoords_xy = grad.xy,
+                    .texcoords_wh = grad.wh,
+    };
+}
+
 void xvg_draw_rectangle(XVG* xvg, float x, float y, float w, float h, float br, float stroke_width, uint32_t col)
 {
     XVGGradient grad = {.colour1 = col};
-    xvg_draw_rectangle_with_gradient(xvg, x, y, w, h, br, stroke_width, grad);
+    xvg_draw_rectangle_with_gradient_ex(xvg, x, y, w, h, br, br, br, br, stroke_width, grad);
 }
 
 void xvg_draw_rectangle_with_gradient(
@@ -967,25 +1014,7 @@ void xvg_draw_rectangle_with_gradient(
     float       stroke_width,
     XVGGradient grad)
 {
-    _xvg_set_bound_texture(xvg, &grad);
-    XVGShapeType shape_type = stroke_width > 0 ? XVG_SHAPE_ROUNDED_RECTANGLE_STROKE : XVG_SHAPE_ROUNDED_RECTANGLE_FILL;
-
-    float feather = 4.0f / xm_minf(w, h);
-
-    xvg_shape_t* shape = _xvg_get_shape(xvg);
-    *shape             = (xvg_shape_t){
-                    .topleft             = {x, y},
-                    .bottomright         = {x + w, y + h},
-                    .sdf_data            = _xvg_compress_sdf_data(shape_type, grad.type, feather, stroke_width),
-                    .borderradius_arcpie = _xvg_compress_border_radius(br, br, br, br),
-
-                    .colour1      = grad.colour1,
-                    .colour2      = grad.colour2,
-                    .gradient_a   = {grad.gradient_a[0], grad.gradient_a[1]},
-                    .gradient_b   = {grad.gradient_b[0], grad.gradient_b[1]},
-                    .texcoords_xy = grad.xy,
-                    .texcoords_wh = grad.wh,
-    };
+    xvg_draw_rectangle_with_gradient_ex(xvg, x, y, w, h, br, br, br, br, stroke_width, grad);
 }
 
 void xvg_draw_triangle_with_gradient(
