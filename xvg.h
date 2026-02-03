@@ -484,6 +484,17 @@ void xvg_draw_text(
     unsigned    font_size,
     XVGAlign    align,
     uint32_t    col);
+void xvg_draw_text_ex(
+    XVG*        xvg,
+    float       x,
+    float       y,
+    const char* text_start,
+    const char* text_end,
+    unsigned    font_size,
+    XVGAlign    alignment,
+    uint32_t    colour,
+    float       break_width,
+    float       line_height);
 
 const XVGTextLayout* xvg_create_text_layout(
     XVG*        xvg,
