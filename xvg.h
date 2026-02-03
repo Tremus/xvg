@@ -318,7 +318,8 @@ void xvg_end_frame(XVG*, int window_width, int window_height);
 // filled. Values are in pixels. Stroking is done on the INSIDE of the shape, so you always get accurate widths
 // Strokes have a maximum width of 15 with 2 exceptions: line plots (2px max), arcs & rounded lines (31px max)
 // 'radius' is in pixels
-// 'angle' and 'rotate' is in radians [-PI, PI]
+// 'angle' and 'rotate' are in the less convential but greatly superior 'turns'.
+// 0 turns == 0 degrees/0pi. 1 turn == 360 degrees/2pi, 0.25 turn = halfpi/90deg etc.
 // Colours are in the highly unintuitive but highly readable ABGR format (0xffff007f is yellow, 50% opacity). This makes
 // it easy to copy paste hex codes from apps like Figma, Photoshop, or web browsers. This library swizzles to RGBA
 
@@ -397,8 +398,8 @@ void xvg_draw_triangle_with_gradient(
     float       y,
     float       w,
     float       h,
-    float       rotate_radians,
-    float       stroke_width,
+    float       rotate,
+    float       stroke,
     XVGGradient grad);
 
 void xvg_draw_pie(
@@ -425,8 +426,8 @@ void xvg_draw_arc(
     float    cx,
     float    cy,
     float    radius_px,
-    float    angle_start,
-    float    angle_end,
+    float    start_turn,
+    float    end_turn,
     float    stroke_px,
     bool     butt,
     uint32_t col);
@@ -435,8 +436,8 @@ void xvg_draw_arc_with_gradient(
     float       cx,
     float       cy,
     float       radius_px,
-    float       angle_start,
-    float       angle_end,
+    float       start_turn,
+    float       end_turn,
     float       stroke_px,
     bool        butt,
     XVGGradient grad);
@@ -629,13 +630,10 @@ uint32_t _xvg_packUnorm4x8(float x_f, float y_f, float z_f, float w_f)
     return compressed.u32;
 }
 
-uint32_t _xvg_compress_arc_rotate_and_range(float rotate_radians, float range_radians)
+uint32_t _xvg_compress_arc_rotate_and_range(float rotate_turns, float range_turns)
 {
-    // remap [-PI, PI] to [0-1]
-    float rotate_turns = rotate_radians * XM_1_TAUf;
-    float range_turns  = range_radians * XM_1_TAUf;
-    float rotate_norm  = rotate_turns - floorf(rotate_turns);
-    float range_norm   = range_turns - floorf(range_turns);
+    float rotate_norm = rotate_turns - floorf(rotate_turns);
+    float range_norm  = range_turns - floorf(range_turns);
     xassert(rotate_norm >= 0 && rotate_norm <= 1);
     xassert(range_norm >= 0 && range_norm <= 1);
     return _xvg_packUnorm2x16(rotate_norm, range_norm);
@@ -986,20 +984,20 @@ void xvg_draw_triangle_with_gradient(
     float       y,
     float       w,
     float       h,
-    float       rotate_radians,
-    float       stroke_width,
+    float       rotate,
+    float       stroke,
     XVGGradient grad)
 {
     _xvg_set_bound_texture(xvg, &grad);
-    XVGShapeType shape_type = stroke_width > 0 ? XVG_SHAPE_TRIANGLE_STROKE : XVG_SHAPE_TRIANGLE_FILL;
+    XVGShapeType shape_type = stroke > 0 ? XVG_SHAPE_TRIANGLE_STROKE : XVG_SHAPE_TRIANGLE_FILL;
     float        feather    = 4.0f / xm_minf(w, h);
 
     xvg_shape_t* shape = _xvg_get_shape(xvg);
     *shape             = (xvg_shape_t){
                     .topleft             = {x, y},
                     .bottomright         = {x + w, y + h},
-                    .sdf_data            = _xvg_compress_sdf_data(shape_type, grad.type, feather, stroke_width),
-                    .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(rotate_radians, 0),
+                    .sdf_data            = _xvg_compress_sdf_data(shape_type, grad.type, feather, stroke),
+                    .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(rotate, 0),
                     .colour1             = grad.colour1,
                     .colour2             = grad.colour2,
                     .gradient_a          = {grad.gradient_a[0], grad.gradient_a[1]},
@@ -1008,18 +1006,10 @@ void xvg_draw_triangle_with_gradient(
                     .texcoords_wh        = grad.wh,
     };
 }
-void xvg_draw_triangle(
-    XVG*     xvg,
-    float    x,
-    float    y,
-    float    w,
-    float    h,
-    float    rotate_radians,
-    float    stroke_width,
-    uint32_t colour)
+void xvg_draw_triangle(XVG* xvg, float x, float y, float w, float h, float rotate, float stroke_width, uint32_t colour)
 {
     XVGGradient grad = {.colour1 = colour};
-    xvg_draw_triangle_with_gradient(xvg, x, y, w, h, rotate_radians, stroke_width, grad);
+    xvg_draw_triangle_with_gradient(xvg, x, y, w, h, rotate, stroke_width, grad);
 }
 
 void xvg_draw_pie_with_gradient(
@@ -1027,16 +1017,16 @@ void xvg_draw_pie_with_gradient(
     float       cx,
     float       cy,
     float       radius_px,
-    float       start_radians,
-    float       end_radians,
+    float       start_turn,
+    float       end_turn,
     float       stroke_width,
     XVGGradient grad)
 {
     _xvg_set_bound_texture(xvg, &grad);
     XVGShapeType shape_type   = stroke_width > 0 ? XVG_SHAPE_PIE_STROKE : XVG_SHAPE_PIE_FILL;
     float        feather      = 2.0f / radius_px;
-    float        angle_range  = end_radians - start_radians;
-    float        angle_rotate = (end_radians + start_radians);
+    float        angle_range  = end_turn - start_turn;
+    float        angle_rotate = (end_turn + start_turn);
 
     xvg_shape_t* shape = _xvg_get_shape(xvg);
     *shape             = (xvg_shape_t){
@@ -1058,13 +1048,13 @@ void xvg_draw_pie(
     float    cx,
     float    cy,
     float    radius_px,
-    float    start_radians,
-    float    end_radians,
+    float    start_turn,
+    float    end_turn,
     float    stroke_width,
     uint32_t colour)
 {
     XVGGradient grad = {.colour1 = colour};
-    xvg_draw_pie_with_gradient(xvg, cx, cy, radius_px, start_radians, end_radians, stroke_width, grad);
+    xvg_draw_pie_with_gradient(xvg, cx, cy, radius_px, start_turn, end_turn, stroke_width, grad);
 }
 
 void xvg_draw_arc_with_gradient(
@@ -1072,25 +1062,37 @@ void xvg_draw_arc_with_gradient(
     float       cx,
     float       cy,
     float       radius_px,
-    float       start_radians,
-    float       end_radians,
+    float       start_turn,
+    float       end_turn,
     float       stroke_width,
     bool        butt,
     XVGGradient grad)
 {
     _xvg_set_bound_texture(xvg, &grad);
 
-    XVGShapeType shape_type   = butt ? XVG_SHAPE_ARC_BUTT_STROKE : XVG_SHAPE_ARC_ROUND_STROKE;
-    float        feather      = 2.0f / radius_px;
-    float        angle_range  = end_radians - start_radians;
-    float        angle_rotate = (end_radians + start_radians);
+    XVGShapeType shape_type = butt ? XVG_SHAPE_ARC_BUTT_STROKE : XVG_SHAPE_ARC_ROUND_STROKE;
+    float        feather    = 2.0f / radius_px;
+
+    float turn_low  = xm_minf(start_turn, end_turn);
+    float turn_high = xm_maxf(start_turn, end_turn);
+
+    float rotate_turns = turn_low;
+    float range_turns  = turn_high - turn_low;
+
+    rotate_turns = range_turns * 0.5f + rotate_turns;
+    range_turns  = range_turns * 0.5f;
+    if (butt)
+    {
+        range_turns  -= 0.25f;
+        rotate_turns += 0.5f;
+    }
 
     xvg_shape_t* shape = _xvg_get_shape(xvg);
     *shape             = (xvg_shape_t){
                     .topleft             = {cx - radius_px, cy - radius_px},
                     .bottomright         = {cx + radius_px, cy + radius_px},
                     .sdf_data            = _xvg_compress_sdf_data(shape_type, grad.type, feather, stroke_width * 0.5f),
-                    .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(angle_rotate * 0.5f, angle_range * 0.5f),
+                    .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(rotate_turns, range_turns),
                     .colour1             = grad.colour1,
                     .colour2             = grad.colour2,
                     .gradient_a          = {grad.gradient_a[0], grad.gradient_a[1]},
@@ -1105,14 +1107,14 @@ void xvg_draw_arc(
     float    cx,
     float    cy,
     float    radius_px,
-    float    start_radians,
-    float    end_radians,
+    float    start_turn,
+    float    end_turn,
     float    stroke_width,
     bool     butt,
     uint32_t colour)
 {
     XVGGradient grad = {.colour1 = colour};
-    xvg_draw_arc_with_gradient(xvg, cx, cy, radius_px, start_radians, end_radians, stroke_width, butt, grad);
+    xvg_draw_arc_with_gradient(xvg, cx, cy, radius_px, start_turn, end_turn, stroke_width, butt, grad);
 }
 
 void xvg_draw_line_round_with_gradient(XVG* xvg, float x0, float y0, float x1, float y1, float stroke, XVGGradient grad)
