@@ -133,9 +133,8 @@ typedef union XVGAtlasRectHeader
     struct
     {
         uint32_t glyph_index;
-        // TODO: this could probably be packed into an integer. To support sizes like 12.25, multiply & divide by 4
-        // This could make room for font ids in the header
-        float font_size;
+        // TODO: this could probably be packed into a smaller integer. This could make room for font ids in the header
+        unsigned font_size;
     };
     uint64_t data;
 } XVGAtlasRectHeader;
@@ -157,9 +156,10 @@ typedef struct XVGAtlasRect
 
 typedef struct XVGAtlas
 {
-    sg_view img_view;
-    bool    dirty;
-    bool    full;
+    unsigned char* img_data;
+    sg_view        img_view;
+    bool           dirty;
+    bool           full;
 } XVGAtlas;
 
 typedef struct XVGFont
@@ -263,10 +263,9 @@ typedef struct XVG
 
         struct
         {
-            int            idx;
-            stbrp_context  rectpack_ctx;
-            stbrp_node*    nodes;
-            unsigned char* img_data;
+            int           idx;
+            stbrp_context rectpack_ctx;
+            stbrp_node*   nodes;
         } current_atlas;
 
         struct FT_LibraryRec_* ft_lib;
@@ -482,7 +481,7 @@ void xvg_draw_text(
     float       y,
     const char* text_begin,
     const char* text_end,
-    float       font_size,
+    unsigned    font_size,
     XVGAlign    align,
     uint32_t    col);
 
@@ -490,7 +489,7 @@ const XVGTextLayout* xvg_create_text_layout(
     XVG*        xvg,
     const char* text_start,
     const char* text_end,
-    float       font_size,
+    unsigned    font_size,
     float       break_width,
     float       _line_height);
 static void xvg_release_text_layout(XVG* xvg, const XVGTextLayout* layout)
@@ -591,7 +590,7 @@ void xvg_command_custom(XVG*, void* uptr, XVGCustomFunc func, const char* label)
 
 uint32_t _xvg_compress_sdf_data(XVGShapeType shape_type, XVGColourType col_type, float feather, float stroke_width)
 {
-    xassert(stroke_width >= 0 && stroke_width < 16);
+    XVG_ASSERT(stroke_width >= 0 && stroke_width < 16);
     xvecu compressed = {
         .r = shape_type,
         .g = col_type,
@@ -634,8 +633,8 @@ uint32_t _xvg_compress_arc_rotate_and_range(float rotate_turns, float range_turn
 {
     float rotate_norm = rotate_turns - floorf(rotate_turns);
     float range_norm  = range_turns - floorf(range_turns);
-    xassert(rotate_norm >= 0 && rotate_norm <= 1);
-    xassert(range_norm >= 0 && range_norm <= 1);
+    XVG_ASSERT(rotate_norm >= 0 && rotate_norm <= 1);
+    XVG_ASSERT(range_norm >= 0 && range_norm <= 1);
     return _xvg_packUnorm2x16(rotate_norm, range_norm);
 }
 
@@ -1186,10 +1185,10 @@ void xvg_draw_line_plot(
     else
     {
         // TODO: handle retina screens. Linear interpolation between points should be fine
-        xassert(false);
+        XVG_ASSERT(false);
     }
 
-    xassert(end_idx >= 1);
+    XVG_ASSERT(end_idx >= 1);
     float feather = 4.0f / xm_minf(width, height);
 
     uint32_t line_buffer_range = (uint32_t)xvg->line_buffer_len | (end_idx << 16);
@@ -1205,7 +1204,7 @@ void xvg_draw_line_plot(
     };
 
     xvg->line_buffer_len += N;
-    xassert(xvg->line_buffer_len <= XVG_ARRLEN(xvg->line_buffer));
+    XVG_ASSERT(xvg->line_buffer_len <= XVG_ARRLEN(xvg->line_buffer));
 }
 
 XVGFontSlot* _xvg_get_current_font_slot(XVG* xvg) { return &xvg->text.fonts[xvg->text.current_font_idx]; }
@@ -1219,7 +1218,7 @@ XVGFont _xvg_add_font_from_memory_impl(XVG* xvg, const void* data, size_t datale
         {
             // TODO: pass data to kbts
             int err = FT_New_Memory_Face(xvg->text.ft_lib, data, datalen, 0, &sl->ft_face);
-            xassert(err == 0);
+            XVG_ASSERT(err == 0);
             if (err != 0)
                 break;
 
@@ -1230,7 +1229,7 @@ XVGFont _xvg_add_font_from_memory_impl(XVG* xvg, const void* data, size_t datale
             FT_UInt  space_char = 32;
             FT_Fixed advance    = 0;
             err                 = FT_Get_Advance(sl->ft_face, space_char, FT_LOAD_NO_SCALE, &advance);
-            xassert(err == 0);
+            XVG_ASSERT(err == 0);
             sl->space_advance = advance;
 
             return (XVGFont){i + 1};
@@ -1245,7 +1244,7 @@ XVGFont xvg_add_font_from_path(XVG* xvg, const char* path)
     size_t datalen = 0;
     bool   owned   = true;
     bool   ok      = xfiles_read(path, &data, &datalen);
-    xassert(ok);
+    XVG_ASSERT(ok);
     if (!ok)
         return (XVGFont){0};
     return _xvg_add_font_from_memory_impl(xvg, data, datalen, owned);
@@ -1307,19 +1306,25 @@ XVGAtlas _xvg_create_new_atlas()
         .pixel_format         = XVG_SG_PIXEL_FORMAT,
         .usage.dynamic_update = true,
     });
-    xassert(img.id);
+    XVG_ASSERT(img.id);
+
     XVGAtlas atlas = {.img_view = sg_make_view(&(sg_view_desc){.texture.image = img})};
-    xassert(atlas.img_view.id);
+    XVG_ASSERT(atlas.img_view.id);
+
+    const size_t img_size = XVG_ATLAS_HEIGHT * XVG_ATLAS_ROW_STRIDE;
+    atlas.img_data        = XVG_MALLOC(img_size);
+    memset(atlas.img_data, 0, img_size);
+
     return atlas;
 }
 
 XVGAtlas* _xvg_get_current_font_atlas(XVG* xvg)
 {
-    xassert(xvg->text.current_atlas.idx < XVG_ARRLEN(xvg->text.atlases));
+    XVG_ASSERT(xvg->text.current_atlas.idx < XVG_ARRLEN(xvg->text.atlases));
     return xvg->text.atlases + xvg->text.current_atlas.idx;
 }
 
-int _xvg_render_glyph(XVG* xvg, uint32_t glyph_index, float font_size)
+int _xvg_render_glyph(XVG* xvg, uint32_t glyph_index, unsigned font_size)
 {
     int num_packed = 0;
 
@@ -1330,12 +1335,12 @@ int _xvg_render_glyph(XVG* xvg, uint32_t glyph_index, float font_size)
         return num_packed;
 
     int err = FT_Load_Glyph(sl->ft_face, glyph_index, XVG_FT_LOAD);
-    xassert(!err);
+    XVG_ASSERT(!err);
 
     const FT_GlyphSlot glyph = sl->ft_face->glyph;
     const FT_Bitmap*   bmp   = &glyph->bitmap;
-    xassert(bmp->pixel_mode == XVG_FT_PIXEL_MODE);
-    xassert((bmp->width % XVG_FT_BITMAP_CHANNELS) == 0); // note: FT width is measured in bytes (subpixels)
+    XVG_ASSERT(bmp->pixel_mode == XVG_FT_PIXEL_MODE);
+    XVG_ASSERT((bmp->width % XVG_FT_BITMAP_CHANNELS) == 0); // note: FT width is measured in bytes (subpixels)
     // Note all glyphs have height/rows... (spaces?)
     if (bmp->width && bmp->rows)
     {
@@ -1369,15 +1374,17 @@ int _xvg_render_glyph(XVG* xvg, uint32_t glyph_index, float font_size)
 
                 rect       = (stbrp_rect){.w = width_pixels + RECTPACK_PADDING, .h = bmp->rows + RECTPACK_PADDING};
                 num_packed = stbrp_pack_rects(&xvg->text.current_atlas.rectpack_ctx, &rect, 1);
-                xassert(num_packed == 1);
+                XVG_ASSERT(num_packed == 1);
             }
         }
 
         if (num_packed)
         {
             int expected_height = glyph->metrics.height >> 6;
-            xassert(expected_height == bmp->rows);
-            XVGAtlasRect arect;
+            XVG_ASSERT(expected_height == bmp->rows);
+            XVG_ASSERT(glyph->bitmap_left >= -128 && glyph->bitmap_left < 127);
+            XVG_ASSERT(glyph->bitmap_top >= -128 && glyph->bitmap_top < 127);
+            XVGAtlasRect arect       = {0};
             arect.header.glyph_index = glyph_index;
             arect.header.font_size   = font_size;
             arect.bearing_x          = glyph->bitmap_left;
@@ -1387,12 +1394,14 @@ int _xvg_render_glyph(XVG* xvg, uint32_t glyph_index, float font_size)
             arect.w                  = width_pixels;
             arect.h                  = bmp->rows;
             arect.img_view           = atlas->img_view;
-            xassert(glyph->advance.x < (1 << 15));
-            xassert(glyph->advance.y < (1 << 15));
-            arect.advance_x = glyph->advance.x;
+            XVG_ASSERT(glyph->advance.x < (1 << 15));
+            XVG_ASSERT(glyph->advance.y < (1 << 15));
+            arect.advance_x = glyph->advance.x + (glyph->lsb_delta - glyph->rsb_delta);
             arect.advance_y = glyph->advance.y;
-            xassert(arect.x + arect.w < XVG_ATLAS_WIDTH);
-            xassert(arect.y + arect.h < XVG_ATLAS_HEIGHT);
+            XVG_ASSERT(arect.x + arect.w < XVG_ATLAS_WIDTH);
+            XVG_ASSERT(arect.y + arect.h < XVG_ATLAS_HEIGHT);
+
+            XVG_ASSERT(bmp->pitch >= 0);
 
             xarr_push(xvg->text.rects, arect);
 
@@ -1412,12 +1421,15 @@ int _xvg_render_glyph(XVG* xvg, uint32_t glyph_index, float font_size)
                 dst_view += 0;
 #endif
 #if defined(XVG_TEXT_MULTICHANNEL)
-                unsigned char* dst = xvg->text.current_atlas.img_data + (arect.y + y) * XVG_ATLAS_ROW_STRIDE +
-                                     arect.x * XVG_GLYPH_ATLAS_CHANNELS;
+                unsigned char* dst =
+                    atlas->img_data + (arect.y + y) * XVG_ATLAS_ROW_STRIDE + (arect.x) * XVG_GLYPH_ATLAS_CHANNELS;
                 unsigned char* src = bmp->buffer + y * bmp->pitch;
 
                 for (int x = 0; x < width_pixels; x++, dst += XVG_GLYPH_ATLAS_CHANNELS, src += XVG_FT_BITMAP_CHANNELS)
                 {
+                    int r  = src[0];
+                    int g  = src[1];
+                    int b  = src[2];
                     dst[0] = src[0];
                     dst[1] = src[1];
                     dst[2] = src[2];
@@ -1436,7 +1448,7 @@ int _xvg_render_glyph(XVG* xvg, uint32_t glyph_index, float font_size)
 // Get cached rect. Rasters the rect to an atlas if not already cached
 // TODO: also compare font id
 // TODO: use fallback fonts. This may require accepting utf32 codepoints to detect language
-XVGAtlasRect _xvg_get_glyph(XVG* xvg, uint32_t glyph_index, float font_size)
+XVGAtlasRect _xvg_get_glyph(XVG* xvg, uint32_t glyph_index, unsigned font_size)
 {
     const int num_rects = xarr_len(xvg->text.rects);
 
@@ -1447,7 +1459,7 @@ XVGAtlasRect _xvg_get_glyph(XVG* xvg, uint32_t glyph_index, float font_size)
         if (xvg->text.rects[j].header.data == header.data)
         {
             XVGAtlasRect* rect = xvg->text.rects + j;
-            xassert(rect->x + rect->w < XVG_ATLAS_WIDTH);
+            XVG_ASSERT(rect->x + rect->w < XVG_ATLAS_WIDTH);
             return *rect;
         }
     }
@@ -1455,16 +1467,17 @@ XVGAtlasRect _xvg_get_glyph(XVG* xvg, uint32_t glyph_index, float font_size)
     int did_raster = _xvg_render_glyph(xvg, glyph_index, font_size);
     if (did_raster)
     {
-        xassert(num_rects + 1 == xarr_len(xvg->text.rects));
+        XVG_ASSERT(num_rects + 1 == xarr_len(xvg->text.rects));
         XVGAtlasRect* rect = xvg->text.rects + num_rects;
-        xassert(rect->x + rect->w < XVG_ATLAS_WIDTH);
+        XVG_ASSERT(rect->x + rect->w < XVG_ATLAS_WIDTH);
         return *rect;
     }
 
     // Note: this stub has a texture view id of 0
     // sokol_gfx should assert in debug mode when trying to bind a texture view with an id of 0
     // In release it should skip all draws using that view. This is our desired behaviour
-    static const XVGAtlasRect stub = {0};
+    static XVGAtlasRect stub = {0};
+    memset(&stub, 0, sizeof(stub));
     return stub;
 }
 
@@ -1487,17 +1500,21 @@ bool _xvg_push_glyph(XVG* xvg, int pen_x, int pen_y, const XVGAtlasRect* rect, u
     XVG_ASSERT(should_push);
     if (should_push)
     {
+        if (xvg->draw_start.text_texture.id != 0 && xvg->draw_start.text_texture.id != rect->img_view.id)
+            xvg_command_batch_draw(xvg, XVG_LABEL("_xvg_push_glyph"));
         if (xvg->draw_start.text_texture.id == 0)
             xvg->draw_start.text_texture = rect->img_view;
-        if (xvg->draw_start.text_texture.id != rect->img_view.id)
-            xvg_command_batch_draw(xvg, XVG_LABEL("_xvg_push_glyph"));
 
-        xvg_text_t* obj   = _xvg_get_text(xvg);
-        obj->topleft      = _xvg_pack_xy_coord(pen_x + rect->bearing_x, pen_y - rect->bearing_y);
+        xvg_text_t* obj = _xvg_get_text(xvg);
+        // obj->topleft[0] = pen_x + (int)rect->bearing_x; // If using floating point coords
+        // obj->topleft[1] = pen_y - (int)rect->bearing_y;
+        obj->topleft      = _xvg_pack_xy_coord(pen_x + (int)rect->bearing_x, pen_y - (int)rect->bearing_y);
         obj->atlas_coords = (xvecu){.r = rect->x, .g = rect->y, .b = rect->w, .a = rect->h}.u32;
         obj->colour       = colour;
 
         xvg->text_buffer_len++;
+
+        XVG_ASSERT(xvg->draw_start.text_texture.id != 0);
     }
     return should_push;
 }
@@ -1548,7 +1565,7 @@ const XVGTextLayout* xvg_create_text_layout(
     XVG*        xvg,
     const char* text_start,
     const char* text_end,
-    float       font_size,
+    unsigned    font_size,
     float       break_width,
     float       _line_height)
 {
@@ -1588,12 +1605,12 @@ const XVGTextLayout* xvg_create_text_layout(
     layout->descender   = m->descender >> 6;
     layout->line_height = line_height >> 6;
 
-    xassert(sl->space_advance);
+    XVG_ASSERT(sl->space_advance);
     const int64_t space_advance = FT_MulFix(sl->space_advance, m->x_scale) / 2;
 
     // Clang-cl makes INT64_MAX a negative integer if we aren't super explicit with types here
     const int64_t break_row_x = break_width != 0 ? (int64_t)(break_width * 64) : (int64_t)INT64_MAX;
-    xassert(break_row_x >= 0);
+    XVG_ASSERT(break_row_x >= 0);
 
     int64_t CursorX = 0, CursorY = 0;
     int     line_xmax = 0, line_xmin = 0;
@@ -1636,8 +1653,9 @@ const XVGTextLayout* xvg_create_text_layout(
         }
         default:
         {
+            // char     c         = cp;
             unsigned glyph_idx = FT_Get_Char_Index(face, cp);
-            xassert(glyph_idx != 0);
+            XVG_ASSERT(glyph_idx != 0);
 
             XVGAtlasRect rect = _xvg_get_glyph(xvg, glyph_idx, font_size);
 
@@ -1663,7 +1681,7 @@ const XVGTextLayout* xvg_create_text_layout(
 
                 glyphs[layout->num_glyphs++] = (XVGGlyphLayout){.x = glyph_px_x, .y = glyph_px_y, .rect = rect};
             }
-            xassert(rect.advance_x > 0);
+            XVG_ASSERT(rect.advance_x > 0);
 
             CursorX        += rect.advance_x;
             prev_glyph_idx  = glyph_idx;
@@ -1677,8 +1695,8 @@ const XVGTextLayout* xvg_create_text_layout(
             if (CursorX > break_row_x)
             {
                 // Break word
-                xassert(layout->num_rows);
-                xassert(num_glyphs_at_last_space <= layout->num_glyphs);
+                XVG_ASSERT(layout->num_rows);
+                XVG_ASSERT(num_glyphs_at_last_space <= layout->num_glyphs);
                 xvg__endRow(xvg, layout, line_ymin, line_ymax, (CursorY + line_height) >> 6);
                 rows = xvg__startRow(xvg, layout);
 
@@ -1694,19 +1712,19 @@ const XVGTextLayout* xvg_create_text_layout(
                 int end_idx = -1;
                 if (num_glyphs_at_last_space > 0)
                 {
-                    xassert(layout->num_rows >= 2);
+                    XVG_ASSERT(layout->num_rows >= 2);
                     XVGGlyphLayout* break_glyph = &glyphs[num_glyphs_at_last_space - 1];
 
                     end_idx           = prev_row->end_idx;
                     prev_row->end_idx = num_glyphs_at_last_space;
                     prev_row->xmax    = break_glyph->x + break_glyph->rect.w;
 
-                    xassert(prev_row->begin_idx <= prev_row->end_idx);
+                    XVG_ASSERT(prev_row->begin_idx <= prev_row->end_idx);
                     layout_xmax = xm_maxi(layout_xmax, prev_row->xmax);
                 }
                 current_row->begin_idx = num_glyphs_at_last_space;
                 current_row->end_idx   = end_idx > 0 ? end_idx : layout->num_glyphs;
-                xassert(current_row->begin_idx <= current_row->end_idx);
+                XVG_ASSERT(current_row->begin_idx <= current_row->end_idx);
 
                 if (current_row->begin_idx < layout->num_glyphs)
                 {
@@ -1717,7 +1735,7 @@ const XVGTextLayout* xvg_create_text_layout(
                         // Apply offsets to glyphs on new line
                         gp->x -= offset_x;
                         gp->y  = (CursorY + line_height) >> 6;
-                        xassert(gp->x >= 0);
+                        XVG_ASSERT(gp->x >= 0);
 
                         // recalculate row stats
                         line_ymax = xm_maxi(line_ymax, gp->rect.bearing_y);
@@ -1729,7 +1747,7 @@ const XVGTextLayout* xvg_create_text_layout(
 
                 CursorX  = CursorX_after_last_space > 0 ? (CursorX - CursorX_after_last_space) : 0;
                 CursorY += line_height;
-                xassert(CursorX >= 0);
+                XVG_ASSERT(CursorX >= 0);
 
                 num_glyphs_at_last_space = -1;
                 CursorX_after_last_space = -1;
@@ -1866,8 +1884,6 @@ void xvg_draw_text_layout(XVG* xvg, const XVGTextLayout* layout, int x, int y, i
         // sg_view target_atlas_view = search_glyphs[0].rect.img_view;
         // XVG_ASSERT(target_atlas_view.id != 0);
 
-        size_t text_buf_begin_len = xvg->text_buffer_len;
-
         // Iterate through remainder of array, putting every glyph with matching atlas into our batch
         for (int i = 0; i < search_glyphs_len; i++)
         {
@@ -1892,19 +1908,6 @@ void xvg_draw_text_layout(XVG* xvg, const XVGTextLayout* layout, int x, int y, i
         }
         size_t text_buf_end_len = xvg->text_buffer_len;
 
-        if (text_buf_end_len != text_buf_begin_len)
-        {
-            // TODO: save metadata and paint info here
-            // xassert(false);
-            // _xvg_command_draw_text(
-            //     xvg,
-            //     XVG_LABEL(__FUNCTION__),
-            //     text_buf_begin_len,
-            //     text_buf_end_len,
-            //     xvg->state.paint.innerColour,
-            //     target_atlas_view);
-        }
-
         XVG_ASSERT(glyphs_consumed <= glyph_pos_len);
         if (glyphs_consumed < glyph_pos_len)
         {
@@ -1925,7 +1928,7 @@ void xvg_draw_text_ex(
     float       y,
     const char* text_start,
     const char* text_end,
-    float       font_size,
+    unsigned    font_size,
     XVGAlign    alignment,
     uint32_t    colour,
     float       break_width,
@@ -1947,7 +1950,7 @@ void xvg_draw_text(
     float       y,
     const char* text_start,
     const char* text_end,
-    float       font_size,
+    unsigned    font_size,
     XVGAlign    alignment,
     uint32_t    colour)
 {
@@ -2036,7 +2039,7 @@ void xvg_init(XVG* xvg)
     // Text
     {
         int ft_err = FT_Init_FreeType(&xvg->text.ft_lib);
-        xassert(ft_err == 0);
+        XVG_ASSERT(ft_err == 0);
 
         xvg->text.sbo = sg_make_buffer(&(sg_buffer_desc){
             .usage.storage_buffer = true,
@@ -2044,11 +2047,11 @@ void xvg_init(XVG* xvg)
             .size                 = sizeof(xvg->text_buffer),
             .label                = "text SBO",
         });
-        xassert(xvg->text.sbo.id);
+        XVG_ASSERT(xvg->text.sbo.id);
         xvg->text.sbv = sg_make_view(&(sg_view_desc){
             .storage_buffer = xvg->text.sbo,
         });
-        xassert(xvg->text.sbv.id);
+        XVG_ASSERT(xvg->text.sbv.id);
 
         xvg->text.pip = sg_make_pipeline(&(sg_pipeline_desc){
 #if defined(XVG_TEXT_MULTICHANNEL)
@@ -2060,7 +2063,7 @@ void xvg_init(XVG* xvg)
             .colors[0] = BLEND_DEFAULT,
 #endif
             .label = XVG_LABEL("xvg-text")});
-        xassert(xvg->text.pip.id);
+        XVG_ASSERT(xvg->text.pip.id);
 
         xarr_setcap(xvg->text.rects, 256);
         xarr_setlen(xvg->text.rects, 0);
@@ -2068,9 +2071,6 @@ void xvg_init(XVG* xvg)
         xvg->text.current_atlas.idx = 0;
         xarr_setlen(xvg->text.current_atlas.nodes, (XVG_ATLAS_WIDTH * 2));
 
-        size_t img_size                  = XVG_ATLAS_HEIGHT * XVG_ATLAS_ROW_STRIDE;
-        xvg->text.current_atlas.img_data = XVG_MALLOC(img_size);
-        memset(xvg->text.current_atlas.img_data, 0, img_size);
         stbrp_init_target(
             &xvg->text.current_atlas.rectpack_ctx,
             XVG_ATLAS_WIDTH - RECTPACK_PADDING,
@@ -2083,7 +2083,6 @@ void xvg_init(XVG* xvg)
 void xvg_deinit(XVG* xvg)
 {
     xarr_free(xvg->text.rects);
-    XVG_FREE(xvg->text.current_atlas.img_data);
     xarr_free(xvg->text.current_atlas.nodes);
 
     for (int i = 0; i < XVG_ARRLEN(xvg->text.fonts); i++)
@@ -2096,6 +2095,14 @@ void xvg_deinit(XVG* xvg)
         // TODO: free kbts here?
         if (sl->ft_face)
             FT_Done_Face(sl->ft_face);
+    }
+    for (int i = 0; i < XVG_ARRLEN(xvg->text.atlases); i++)
+    {
+        XVGAtlas* atlas = &xvg->text.atlases[i];
+        if (atlas->img_data)
+        {
+            XVG_FREE(atlas->img_data);
+        }
     }
     FT_Done_FreeType(xvg->text.ft_lib);
 
@@ -2154,7 +2161,7 @@ void xvg_end_frame(XVG* xvg, int window_width, int window_height)
                 desc.texture.image,
                 &(sg_image_data){
                     .mip_levels[0] = {
-                        .ptr  = xvg->text.current_atlas.img_data,
+                        .ptr  = atlas->img_data,
                         .size = XVG_ATLAS_HEIGHT * XVG_ATLAS_ROW_STRIDE,
                     }});
             atlas->dirty = false;
@@ -2222,7 +2229,7 @@ void xvg_end_frame(XVG* xvg, int window_width, int window_height)
                       .u_storage_buffer_offset = draw->shape_buffer_start,
                 };
                 sg_apply_uniforms(UB_vs_xvg_shapes_uniforms, &SG_RANGE(uniforms));
-                sg_draw(0, num_shapes * 6, 1);
+                sg_draw(0, 6 * num_shapes, 1);
             }
 
             const int num_text = draw->text_buffer_end - draw->text_buffer_start;
@@ -2243,7 +2250,7 @@ void xvg_end_frame(XVG* xvg, int window_width, int window_height)
                 };
                 sg_apply_uniforms(UB_vs_xvg_text_uniforms, &SG_RANGE(uniforms));
 
-                sg_draw(0, 6 * xvg->text_buffer_len, 1);
+                sg_draw(0, 6 * num_text, 1);
             }
             break;
         }

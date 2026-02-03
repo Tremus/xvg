@@ -613,8 +613,9 @@ void main()
 
 struct xvg_text
 {
-    uint atlas_coords; // Unorm4x8
+    // vec2 topleft;
     uint topleft; // Unorm2x16. Contains signed xy coords, requires -32767 delta
+    uint atlas_coords; // Unorm4x8
 
     uint colour; // Unorm4x8
 };
@@ -648,18 +649,18 @@ void main() {
     bool is_right = (gl_VertexIndex & 1) == 1;
     bool is_bottom = i_idx >= 2 && i_idx <= 4;
 
-    vec4 atlas_coords = unpackUnorm4x8(obj.atlas_coords);
-    vec2 glyph_size   = atlas_coords.zw * vec2(255);
+    vec4 atlas_coords = unpackUnorm4x8(obj.atlas_coords) * 255;
     texcoord = vec2(
         is_right  ? (atlas_coords.x + atlas_coords.z) : atlas_coords.x,
         is_bottom ? (atlas_coords.y + atlas_coords.w) : atlas_coords.y
     );
 
     vec2 topleft = unpackUnorm2x16(obj.topleft) * vec2(65535) - vec2(32767);
+    // vec2 topleft = obj.topleft;
 
     vec2 pos = vec2(
-        is_right  ? (topleft.x + glyph_size.x) : topleft.x,
-        is_bottom ? (topleft.y + glyph_size.y) : topleft.y
+        is_right  ? (topleft.x + atlas_coords.z) : topleft.x,
+        is_bottom ? (topleft.y + atlas_coords.w) : topleft.y
     );
     pos = (pos + pos) / u_view_size - vec2(1);
 
@@ -695,7 +696,11 @@ layout(location=0, index=0) out vec4 frag_colour;
 layout(location=0, index=1) out vec4 blend_weights;
 
 void main() {
-    vec3 pixel_coverages = texture(sampler2D(fs_xvg_text_tex, fs_xvg_text_smp), texcoord).rgb;
+    // Normalised coords are too unreliable, even if the texture atlas is very small and when we're using
+    // 'nearest neighbour' samplers, they really aren't great at finding the sample we want...
+    ivec2 itexcoord = ivec2(texcoord);
+    vec3 pixel_coverages = texelFetch(sampler2D(fs_xvg_text_tex, fs_xvg_text_smp), itexcoord, 0).rgb;
+    // vec3 pixel_coverages = texture(sampler2D(fs_xvg_text_tex, fs_xvg_text_smp), texcoord).rgb;
 
     frag_colour = colour * vec4(pixel_coverages, 1);
 	blend_weights = vec4(colour.a * pixel_coverages, colour.a);
