@@ -197,7 +197,7 @@ void main() {
         buffer_begin_idx = int(buffer_idx_range.x);
         buffer_end_idx   = int(buffer_idx_range.y);
         px_inc       = 2.0 / u_size.y;
-        stroke_width = px_inc * sdf_data.w * 16;
+        stroke_width = stroke_width_px / vh;
     }
 
     if (grad_type == XVG_COLOUR_LINEAR_GRADIENT)
@@ -477,11 +477,11 @@ void main()
         float d2 = sdSegment(p, b, c);
         float d = min(d1, d2);
 
-        float shape_vertical   = smoothstep(stroke_width, 0, abs(d));
-        float shape_horizontal = smoothstep(stroke_width, 0, abs(line_y - p.y));
+        float f = feather;
+        float shape_vertical   = smoothstep(stroke_width*0.5, 0, abs(d)+f*0.01);
+        float shape_horizontal = smoothstep(f, 0, abs(line_y - p.y) - stroke_width + f*0.5);
 
         shape = max(shape_vertical, shape_horizontal);
-        shape = sqrt(shape); // gamma
 
         // Crop with rounded rectange
         vec2  crop_b = p_scale;

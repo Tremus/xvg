@@ -402,7 +402,7 @@ void xvg_draw_circle(XVG*, float cx, float cy, float radius_px, float stroke_wid
 void xvg_draw_circle_with_gradient(XVG*, float cx, float cy, float radius_px, float sw, XVGGradient grad);
 
 // Equilateral triangle
-void xvg_draw_triangle(XVG*, float x, float y, float w, float h, float rotate_rad, float stroke_px, uint32_t col);
+void xvg_draw_triangle(XVG*, float x, float y, float w, float h, float rotate, float stroke_px, uint32_t col);
 void xvg_draw_triangle_with_gradient(
     XVG*        xvg,
     float       x,
@@ -1229,14 +1229,14 @@ void xvg_draw_line_plot(
     }
 
     XVG_ASSERT(end_idx >= 1);
-    float feather = 4.0f / xm_minf(width, height);
+    float feather = 4.0f / height;
 
     uint32_t line_buffer_range = (uint32_t)xvg->line_buffer_len | (end_idx << 16);
 
     xvg_shape_t* shape = _xvg_get_shape(xvg);
     *shape             = (xvg_shape_t){
-                    .topleft             = {x, y},
-                    .bottomright         = {x + width, y + height},
+                    .topleft             = {x, y - stroke_width * 0.25f},
+                    .bottomright         = {x + width, y + height + stroke_width * 0.25},
                     .sdf_data            = _xvg_compress_sdf_data(XVG_SHAPE_LINE_PLOT, 0, feather, stroke_width),
                     .borderradius_arcpie = _xvg_compress_border_radius(crop_br, crop_br, crop_br, crop_br),
                     .colour1             = colour,
