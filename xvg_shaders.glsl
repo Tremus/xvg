@@ -625,8 +625,8 @@ layout(binding=0) readonly buffer vs_xvg_text_buffer {
 };
 
 layout(binding=0) uniform vs_xvg_text_uniforms {
-    vec2 u_view_size;
-    int  u_sbo_offset;
+    vec2  u_view_size;
+    int   u_sbo_offset;
 };
 
 out vec2 texcoord;
@@ -680,7 +680,8 @@ in flat vec4 colour;
 out vec4 frag_colour;
 
 void main() {
-    float alpha = texture(sampler2D(fs_xvg_text_tex, fs_xvg_text_smp), texcoord).r;
+    ivec2 itexcoord = ivec2(texcoord);
+    float alpha = texelFetch(sampler2D(fs_xvg_text_tex, fs_xvg_text_smp), itexcoord, 0).r;
     frag_colour = vec4(colour.rgb, colour.a * alpha);
 }
 @end

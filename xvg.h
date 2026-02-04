@@ -13,6 +13,17 @@
 // TODO: increase max stroke width for line plots
 // TODO: support fallback fonts for missing glyphs
 // TODO: support intelligent batching of text when using multiple atlases
+// TODO: support multiple command lists that can store draw calls independantly and be joined later
+         all draw commands will need to receive a ptr to the command list
+         eg.
+         struct XVGCommandList
+        {
+             XVG* xvg;
+             LinekdArena* arena;
+             ... other stuff
+        }
+        ...
+        xvg_draw_thing(XVGCommandList*, ...);
 */
 
 // #ifdef __cplusplus
@@ -1448,7 +1459,7 @@ int _xvg_render_glyph(XVG* xvg, uint32_t glyph_index, unsigned font_size)
             for (int y = 0; y < bmp->rows; y++)
             {
 #if defined(XVG_TEXT_SINGLECHANNEL)
-                unsigned char* dst = xvg->text.current_atlas.img_data + (arect.y + y) * XVG_ATLAS_ROW_STRIDE + arect.x;
+                unsigned char* dst = atlas->img_data + (arect.y + y) * XVG_ATLAS_ROW_STRIDE + arect.x;
                 unsigned char* src = bmp->buffer + y * bmp->pitch;
 
                 unsigned char(*src_view)[512]  = (void*)src;
@@ -2285,7 +2296,7 @@ void xvg_end_frame(XVG* xvg, int window_width, int window_height)
                 });
 
                 vs_xvg_text_uniforms_t uniforms = {
-                    .u_view_size  = {window_width, window_height},
+                    .u_view_size  = {window_width * xvg->backingScaleFactor, window_height * xvg->backingScaleFactor},
                     .u_sbo_offset = draw->text_buffer_start,
                 };
                 sg_apply_uniforms(UB_vs_xvg_text_uniforms, &SG_RANGE(uniforms));
