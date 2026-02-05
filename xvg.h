@@ -1325,32 +1325,48 @@ void xvg_draw_line_plot(
 {
     size_t remaining_capacity = XVG_ARRLEN(xvg->line_buffer) - xvg->line_buffer_len;
 
-    int N = width;
+    int N = width * xvg->backingScaleFactor;
 
     if (N > remaining_capacity)
         N = 0;
 
     XVG_ASSERT(N > 0);
-    if (N == 0)
+    if (N <= 0)
         return;
 
-    uint32_t end_idx = xvg->line_buffer_len + N;
+    const uint32_t begin_idx = xvg->line_buffer_len;
+    const uint32_t end_idx   = xvg->line_buffer_len + N;
 
-    if (xvg->backingScaleFactor == 1)
+    if (xvg->backingScaleFactor == 2)
     {
-        xstatic_assert(sizeof(xvg->line_buffer[0]) == sizeof(data[0]), "Must match");
-        memcpy(xvg->line_buffer + xvg->line_buffer_len, data, N * sizeof(xvg->line_buffer[0]));
+        // Plain old linear interpolation
+        xvg_line_segment_t* dst      = xvg->line_buffer + begin_idx;
+        int                 work_len = N - 2;
+        int                 i, j;
+
+        for (i = 0, j = 0; i < work_len; i += 2, j++)
+        {
+            float a      = data[j];
+            float b      = data[j + 1];
+            dst[i].y     = a;
+            dst[i + 1].y = (a + b) * 0.5;
+        }
+        xassert(begin_idx + i == end_idx - 2);
+        xassert(j == width - 1);
+        dst[i].y     = data[j];
+        dst[i + 1].y = data[j];
     }
     else
     {
-        // TODO: handle retina screens. Linear interpolation between points should be fine
-        XVG_ASSERT(false);
+        xassert(xvg->backingScaleFactor == 1);
+        xstatic_assert(sizeof(xvg->line_buffer[0]) == sizeof(data[0]), "Must match");
+        memcpy(xvg->line_buffer + begin_idx, data, N * sizeof(xvg->line_buffer[0]));
     }
 
     XVG_ASSERT(end_idx >= 1);
     float feather = 4.0f / height;
 
-    uint32_t line_buffer_range = (uint32_t)xvg->line_buffer_len | (end_idx << 16);
+    uint32_t line_buffer_range = (uint32_t)begin_idx | (end_idx << 16);
 
     xvg_shape_t* shape = _xvg_get_shape(xvg);
     *shape             = (xvg_shape_t){
@@ -1362,7 +1378,7 @@ void xvg_draw_line_plot(
                     .buffer_idx_range    = line_buffer_range,
     };
 
-    xvg->line_buffer_len += N;
+    xvg->line_buffer_len = end_idx;
     XVG_ASSERT(xvg->line_buffer_len <= XVG_ARRLEN(xvg->line_buffer));
 }
 
@@ -2161,20 +2177,19 @@ void xvg_init(XVG* xvg)
         // fallback_img
         static const uint32_t pixel_white = 0xffffffff;
 
-        xvg->fallback_img      = sg_make_image(&(sg_image_desc){
-                 .width              = 1,
-                 .height             = 1,
-                 .pixel_format       = SG_PIXELFORMAT_RGBA8,
-                 .data.mip_levels[0] = {
-                     .ptr  = &pixel_white,
-                     .size = sizeof(pixel_white),
-            }});
+        xvg->fallback_img      = sg_make_image(&(sg_image_desc){.width              = 1,
+                                                                .height             = 1,
+                                                                .pixel_format       = SG_PIXELFORMAT_RGBA8,
+                                                                .data.mip_levels[0] = {
+                                                                    .ptr  = &pixel_white,
+                                                                    .size = sizeof(pixel_white),
+                                                           }});
         xvg->fallback_img_view = sg_make_view(&(sg_view_desc){.texture = xvg->fallback_img});
 
-        xvg->shapes.pip = sg_make_pipeline(&(sg_pipeline_desc){
-            .shader    = sg_make_shader(_xvg_shapes_shader_desc(sg_query_backend())),
-            .colors[0] = BLEND_DEFAULT,
-            .label     = XVG_LABEL("xvg-shapes-pipeline")});
+        xvg->shapes.pip =
+            sg_make_pipeline(&(sg_pipeline_desc){.shader = sg_make_shader(_xvg_shapes_shader_desc(sg_query_backend())),
+                                                 .colors[0] = BLEND_DEFAULT,
+                                                 .label     = XVG_LABEL("xvg-shapes-pipeline")});
 
         xvg->shapes.sbo = sg_make_buffer(&(sg_buffer_desc){
             .usage.storage_buffer = true,
@@ -2318,11 +2333,10 @@ void xvg_end_frame(XVG* xvg, int window_width, int window_height)
             sg_view_desc desc = sg_query_view_desc(atlas->img_view);
             sg_update_image(
                 desc.texture.image,
-                &(sg_image_data){
-                    .mip_levels[0] = {
-                        .ptr  = atlas->img_data,
-                        .size = XVG_ATLAS_HEIGHT * XVG_ATLAS_ROW_STRIDE,
-                    }});
+                &(sg_image_data){.mip_levels[0] = {
+                                     .ptr  = atlas->img_data,
+                                     .size = XVG_ATLAS_HEIGHT * XVG_ATLAS_ROW_STRIDE,
+                                 }});
             atlas->dirty = false;
         }
     }
