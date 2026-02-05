@@ -598,6 +598,8 @@ void xvg_command_set_viewport(XVG*, int x, int y, int w, int h, const char* labe
 void xvg_command_batch_draw(XVG*, const char* label);
 void xvg_command_custom(XVG*, void* uptr, XVGCustomFunc func, const char* label);
 
+sg_image xvg_make_image_with_mipmaps(const sg_image_desc* desc_);
+
 // #ifdef __cplusplus
 // }
 // #endif
@@ -606,6 +608,7 @@ void xvg_command_custom(XVG*, void* uptr, XVGCustomFunc func, const char* label)
 
 #ifdef XVG_IMPL
 #undef XVG_IMPL
+#include <stb_image_resize2.h>
 #include <string.h>
 #include <utf8.h>
 #include <xhl/array.h>
@@ -621,6 +624,111 @@ void xvg_command_custom(XVG*, void* uptr, XVGCustomFunc func, const char* label)
 #define XVG_REALLOC(ptr, sz) realloc(ptr, sz)
 #define XVG_FREE(ptr)        free(ptr)
 #endif
+
+// Source: https://github.com/floooh/sokol/issues/102
+// Modified to use STBIR
+sg_image xvg_make_image_with_mipmaps(const sg_image_desc* desc_)
+{
+    sg_image_desc desc = *desc_;
+    // TODO: support floats
+    XVG_ASSERT(
+        desc.pixel_format == SG_PIXELFORMAT_RGBA8 || desc.pixel_format == SG_PIXELFORMAT_BGRA8 ||
+        desc.pixel_format == SG_PIXELFORMAT_R8);
+
+    unsigned num_channels = 1;
+    if (desc.pixel_format == SG_PIXELFORMAT_RGBA8 || desc.pixel_format == SG_PIXELFORMAT_BGRA8)
+        num_channels = 4;
+
+    stbir_pixel_layout layout_type = desc.pixel_format == SG_PIXELFORMAT_RGBA8   ? STBIR_RGBA
+                                     : desc.pixel_format == SG_PIXELFORMAT_BGRA8 ? STBIR_BGRA
+                                                                                 : STBIR_1CHANNEL;
+
+    int max_slices = desc.num_slices;
+    if (max_slices < 1)
+        max_slices = 1;
+
+    int w          = desc.width;
+    int h          = desc.height * max_slices;
+    int total_size = 0;
+
+    int target_max_mipmap_levels = desc.num_mipmaps;
+    if (target_max_mipmap_levels <= 0)
+        target_max_mipmap_levels = SG_MAX_MIPMAPS;
+    if (target_max_mipmap_levels > SG_MAX_MIPMAPS)
+        target_max_mipmap_levels = SG_MAX_MIPMAPS;
+
+    int max_mipmap_levels;
+    for (max_mipmap_levels = 1; max_mipmap_levels < target_max_mipmap_levels; ++max_mipmap_levels)
+    {
+        w /= 2;
+        h /= 2;
+
+        if (w < 1 || h < 1)
+            break;
+
+        total_size += (w * h * num_channels);
+    }
+
+    unsigned char* big_target = XVG_MALLOC(total_size);
+    unsigned char* target     = big_target;
+    XVG_ASSERT(big_target);
+
+    int target_width  = desc.width;
+    int target_height = desc.height;
+    int dst_height    = target_height * max_slices;
+
+    for (int level = 1; level < max_mipmap_levels; ++level)
+    {
+        unsigned char* src = (unsigned char*)desc.data.mip_levels[level - 1].ptr;
+        if (!src)
+            break;
+
+        int src_w      = target_width;
+        int src_h      = target_height;
+        target_width  /= 2;
+        target_height /= 2;
+        if (target_width < 1 && target_height < 1)
+            break;
+
+        if (target_width < 1)
+            target_width = 1;
+
+        if (target_height < 1)
+            target_height = 1;
+
+        dst_height              /= 2;
+        unsigned       img_size  = target_width * dst_height * num_channels;
+        unsigned char* dst       = target;
+
+        XVG_ASSERT(dst < big_target + total_size);
+
+        for (int slice = 0; slice < max_slices; ++slice)
+        {
+            stbir_resize_uint8_srgb(
+                src,
+                src_w,
+                src_h,
+                src_w * num_channels,
+                dst,
+                target_width,
+                target_height,
+                target_width * num_channels,
+                layout_type);
+
+            src += (src_w * src_h * num_channels);
+            dst += (target_width * target_height * num_channels);
+        }
+        desc.data.mip_levels[level].ptr   = target;
+        desc.data.mip_levels[level].size  = img_size;
+        target                           += img_size;
+        desc.num_mipmaps                  = level + 1;
+    }
+    XVG_ASSERT(desc.num_mipmaps == max_mipmap_levels);
+
+    sg_image img = sg_make_image(&desc);
+    XVG_FREE(big_target);
+    return img;
+}
 
 uint32_t _xvg_compress_sdf_data(XVGShapeType shape_type, XVGColourType col_type, float feather, float stroke_width)
 {
