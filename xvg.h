@@ -734,8 +734,8 @@ uint32_t _xvg_compress_sdf_data(XVGShapeType shape_type, XVGColourType col_type,
 {
     XVG_ASSERT(stroke_width >= 0 && stroke_width < 16);
     xvecu compressed = {
-        .r = shape_type,
-        .g = col_type,
+        .r = shape_type | (col_type << 4),
+        .g = 0, // empty
         .b = (uint8_t)(xm_minf(255, feather * 255)),
         .a = (uint8_t)(xm_minf(255, stroke_width * 16)),
     };
@@ -2177,7 +2177,8 @@ void xvg_init(XVG* xvg)
         // fallback_img
         static const uint32_t pixel_white = 0xffffffff;
 
-        xvg->fallback_img      = sg_make_image(&(sg_image_desc){.width              = 1,
+        xvg->fallback_img      = sg_make_image(&(sg_image_desc){
+                 .width              = 1,
                                                                 .height             = 1,
                                                                 .pixel_format       = SG_PIXELFORMAT_RGBA8,
                                                                 .data.mip_levels[0] = {
@@ -2186,8 +2187,8 @@ void xvg_init(XVG* xvg)
                                                            }});
         xvg->fallback_img_view = sg_make_view(&(sg_view_desc){.texture = xvg->fallback_img});
 
-        xvg->shapes.pip =
-            sg_make_pipeline(&(sg_pipeline_desc){.shader = sg_make_shader(_xvg_shapes_shader_desc(sg_query_backend())),
+        xvg->shapes.pip = sg_make_pipeline(&(sg_pipeline_desc){
+            .shader    = sg_make_shader(_xvg_shapes_shader_desc(sg_query_backend())),
                                                  .colors[0] = BLEND_DEFAULT,
                                                  .label     = XVG_LABEL("xvg-shapes-pipeline")});
 
@@ -2333,7 +2334,8 @@ void xvg_end_frame(XVG* xvg, int window_width, int window_height)
             sg_view_desc desc = sg_query_view_desc(atlas->img_view);
             sg_update_image(
                 desc.texture.image,
-                &(sg_image_data){.mip_levels[0] = {
+                &(sg_image_data){
+                    .mip_levels[0] = {
                                      .ptr  = atlas->img_data,
                                      .size = XVG_ATLAS_HEIGHT * XVG_ATLAS_ROW_STRIDE,
                                  }});

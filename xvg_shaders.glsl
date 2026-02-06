@@ -55,20 +55,14 @@ layout(binding=0) uniform vs_xvg_shapes_uniforms {
 out vec2 p;
 out vec2 texcoord;
 
-out float buffer_idx;
 out flat float px_scale;
-
-out flat int buffer_begin_idx;
-out flat int buffer_end_idx;
 out flat float px_inc;
 
+out flat uint buffer_idx_range;
 out flat uint sdf_type;
 out flat uint grad_type;
 out flat float feather;
 out flat float stroke_width;
-
-out flat uint colour1;
-out flat uint colour2;
 
 // either:
 // - border_radius
@@ -86,6 +80,9 @@ out flat vec2 gradient_a;
 // inner_shadow_blur_radius
 out flat vec2 gradient_b;
 
+out flat uint colour1;
+out flat uint colour2;
+
 #define XVG_SHAPE_RECTANGLE_FILL   1
 #define XVG_SHAPE_RECTANGLE_STROKE 2
 #define XVG_SHAPE_CIRCLE_FILL      3
@@ -99,7 +96,7 @@ out flat vec2 gradient_b;
 #define XVG_SHAPE_LINE_ROUND       11
 #define XVG_SHAPE_LINE_PLOT        12
 
-#define XVG_COLOUR_SOLID  0
+#define XVG_COLOUR_SOLID           0
 #define XVG_COLOUR_LINEAR_GRADIENT 1
 #define XVG_COLOUR_RADIAL_GRADIENT 2
 #define XVG_COLOUR_CONIC_GRADIENT  3
@@ -139,14 +136,16 @@ void main() {
     p        = vec2(is_right  ? 1 : -1, is_bottom ? -1 : 1);
     px_scale = vw / vh;
 
-    colour1 = vert.colour1;
-    colour2 = vert.colour2;
-
     vec4 sdf_data = unpackUnorm4x8(vert.sdf_data);
 
-    sdf_type     = uint(sdf_data.x * 255);
-    grad_type    = uint(sdf_data.y * 255);
-    feather      =      sdf_data.z * 1;
+    uint sdf_and_grad_type = uint(sdf_data.x * 255);
+
+    // sdf_type     = uint(sdf_data.x * 255);
+    // grad_type    = uint(sdf_data.y * 255);
+    sdf_type  = sdf_and_grad_type & 0xf;
+    grad_type = sdf_and_grad_type >> 4;
+    feather   = sdf_data.z * 1;
+
     float stroke_width_px =      sdf_data.w * 16;
     stroke_width = px_scale * 2 * stroke_width_px / vw;
 
@@ -191,11 +190,10 @@ void main() {
 
     if (sdf_type == XVG_SHAPE_LINE_PLOT)
     {
-        vec2 buffer_idx_range = unpackUnorm2x16(vert.buffer_idx_range) * vec2(65535);
+        vec2 range = unpackUnorm2x16(vert.buffer_idx_range) * vec2(65535);
 
-        buffer_idx       = is_right ? buffer_idx_range.y : buffer_idx_range.x;
-        buffer_begin_idx = int(buffer_idx_range.x);
-        buffer_end_idx   = int(buffer_idx_range.y);
+        // buffer_idx       = is_right ? range.y : range.x;
+        buffer_idx_range = vert.buffer_idx_range;
         px_inc       = 2.0 / u_size.y;
         stroke_width = stroke_width_px / vh;
     }
@@ -231,6 +229,9 @@ void main() {
         is_right  ? texcoords_rb.x : texcoords_xy.x,
         is_bottom ? texcoords_rb.y : texcoords_xy.y
     );
+
+    colour1 = vert.colour1;
+    colour2 = vert.colour2;
 }
 @end
 
@@ -248,26 +249,24 @@ layout(binding=1) readonly buffer fs_xvg_shapes_line_buffer {
 };
 
 in vec2 p;
-in vec2 texcoord;
+in vec2 texcoord; // 16
 
-in float buffer_idx;
 in flat float px_scale;
-in flat int buffer_begin_idx;
-in flat int buffer_end_idx;
 in flat float px_inc;
 
-in flat uint sdf_type;
+in flat uint buffer_idx_range;
+in flat uint sdf_type; // 32
 in flat uint grad_type;
 in flat float feather;
-in flat float stroke_width;
+in flat float stroke_width; // 48
 
-in flat uint colour1;
-in flat uint colour2;
-
-in flat vec4 borderradius_arcpie;
+in flat vec4 borderradius_arcpie; // 64
 
 in flat vec2 gradient_a;
-in flat vec2 gradient_b;
+in flat vec2 gradient_b; // 80
+
+in flat uint colour1;
+in flat uint colour2; // 88
 
 out vec4 frag_color;
 
@@ -448,14 +447,22 @@ void main()
     {
         // Read buffer data
 
-        // If we pad the storage buffer by 1 on each side with real values, then we can get nicer looing clipped edges
-        uint idx      = min(int(buffer_idx),     buffer_end_idx - 1);
-        uint idx_prev = max(int(buffer_idx) - 1, buffer_begin_idx);
-        uint idx_next = min(int(buffer_idx) + 1, buffer_end_idx - 1);
+        vec2 range = unpackUnorm2x16(buffer_idx_range) * vec2(65535);
 
-        float line_y      = line_buffer[idx].y;
-        float line_y_prev = line_buffer[idx_prev].y;
-        float line_y_next = line_buffer[idx_next].y;
+        float buffer_idx = mix(range.x, range.y, p.x * 0.5 + 0.5);
+
+        // buffer_idx       = is_right ? buffer_idx_range.y : buffer_idx_range.x;
+        // buffer_begin_idx = int(buffer_idx_range.x);
+        // buffer_end_idx   = int(buffer_idx_range.y);
+
+        // If we pad the storage buffer by 1 on each side with real values, then we can get nicer looking clipped edges
+        float idx      = min(buffer_idx,     range.y - 1);
+        float idx_prev = max(buffer_idx - 1, range.x);
+        float idx_next = min(buffer_idx + 1, range.y - 1);
+
+        float line_y      = line_buffer[int(idx)].y;
+        float line_y_prev = line_buffer[int(idx_prev)].y;
+        float line_y_next = line_buffer[int(idx_next)].y;
 
         line_y      = line_y      * 2 - 1;
         line_y_prev = line_y_prev * 2 - 1;
@@ -475,7 +482,7 @@ void main()
 
         float d1 = sdSegment(p, a, b);
         float d2 = sdSegment(p, b, c);
-        float d = min(d1, d2);
+        float d  = min(d1, d2);
 
         float f = feather;
         float shape_vertical   = smoothstep(stroke_width*0.5, 0, abs(d)+f*0.01);
