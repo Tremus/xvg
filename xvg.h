@@ -240,7 +240,7 @@ typedef struct XVG
     struct
     {
         int        shape_buffer_start;
-        sg_view    shape_texture;
+        sg_view    shape_texture[4];
         sg_sampler shape_sampler;
 
         int     text_buffer_start;
@@ -548,11 +548,12 @@ typedef struct XVGCommandDraw
 {
     int        shape_buffer_start;
     int        shape_buffer_end;
-    sg_view    shape_texture;
+    sg_view    shape_texture[4];
     sg_sampler shape_sampler;
-    int        text_buffer_start;
-    int        text_buffer_end;
-    sg_view    text_texture;
+
+    int     text_buffer_start;
+    int     text_buffer_end;
+    sg_view text_texture;
 } XVGCommandDraw;
 
 typedef void (*XVGCustomFunc)(void* uptr);
@@ -730,12 +731,17 @@ sg_image xvg_make_image_with_mipmaps(const sg_image_desc* desc_)
     return img;
 }
 
-uint32_t _xvg_compress_sdf_data(XVGShapeType shape_type, XVGColourType col_type, float feather, float stroke_width)
+uint32_t _xvg_compress_sdf_data(
+    unsigned      tex_idx,
+    XVGShapeType  shape_type,
+    XVGColourType col_type,
+    float         feather,
+    float         stroke_width)
 {
     XVG_ASSERT(stroke_width >= 0 && stroke_width < 16);
     xvecu compressed = {
-        .r = shape_type | (col_type << 4),
-        .g = 0, // empty
+        .r = tex_idx,
+        .g = shape_type | (col_type << 4),
         .b = (uint8_t)(xm_minf(255, feather * 255)),
         .a = (uint8_t)(xm_minf(255, stroke_width * 16)),
     };
@@ -877,18 +883,24 @@ void xvg_command_batch_draw(XVG* xvg, const char* label)
 
     draw->shape_buffer_start = xvg->draw_start.shape_buffer_start;
     draw->shape_buffer_end   = xvg->shapes_buffer_len;
-    draw->shape_texture = xvg->draw_start.shape_texture.id ? xvg->draw_start.shape_texture : xvg->fallback_img_view;
+    draw->shape_texture[0]   = xvg->draw_start.shape_texture[0];
+    draw->shape_texture[1]   = xvg->draw_start.shape_texture[1];
+    draw->shape_texture[2]   = xvg->draw_start.shape_texture[2];
+    draw->shape_texture[3]   = xvg->draw_start.shape_texture[3];
     draw->shape_sampler = xvg->draw_start.shape_sampler.id ? xvg->draw_start.shape_sampler : xvg->smp_nearest_neighbour;
 
     draw->text_buffer_start = xvg->draw_start.text_buffer_start;
     draw->text_buffer_end   = xvg->text_buffer_len;
     draw->text_texture      = xvg->draw_start.text_texture;
 
-    xvg->draw_start.shape_buffer_start = xvg->shapes_buffer_len;
-    xvg->draw_start.shape_texture.id   = 0;
-    xvg->draw_start.shape_sampler.id   = 0;
-    xvg->draw_start.text_buffer_start  = xvg->text_buffer_len;
-    xvg->draw_start.text_texture.id    = 0;
+    xvg->draw_start.shape_buffer_start  = xvg->shapes_buffer_len;
+    xvg->draw_start.shape_texture[0].id = 0;
+    xvg->draw_start.shape_texture[1].id = 0;
+    xvg->draw_start.shape_texture[2].id = 0;
+    xvg->draw_start.shape_texture[3].id = 0;
+    xvg->draw_start.shape_sampler.id    = 0;
+    xvg->draw_start.text_buffer_start   = xvg->text_buffer_len;
+    xvg->draw_start.text_texture.id     = 0;
 }
 
 void xvg_command_custom(XVG* xvg, void* uptr, XVGCustomFunc func, const char* label)
@@ -1021,20 +1033,46 @@ xvg_make_image_fill(sg_view texture, sg_sampler sampler, uint32_t x, uint32_t y,
     };
 }
 
-void _xvg_set_bound_texture(XVG* xvg, const XVGGradient* grad)
+// Returns tex_idx
+unsigned _xvg_set_bound_texture(XVG* xvg, const XVGGradient* grad)
 {
-    bool replace_texture = xvg->draw_start.shape_texture.id != grad->texture.id;
-    bool replace_sampler = xvg->draw_start.shape_sampler.id != grad->sampler.id;
-    if (replace_texture || replace_sampler)
+    if (grad->texture.id == 0)
+        return 0;
+
+    unsigned i = 0;
+    for (; i < XVG_ARRLEN(xvg->draw_start.shape_texture); i++)
+    {
+        if (xvg->draw_start.shape_texture[i].id == grad->texture.id)
+            break;
+        if (xvg->draw_start.shape_texture[i].id == 0)
+        {
+            xvg->draw_start.shape_texture[i] = grad->texture;
+            break;
+        }
+    }
+
+    bool tex_full = i == XVG_ARRLEN(xvg->draw_start.shape_texture);
+    // bool replace_texture = xvg->draw_start.shape_texture.id != grad->texture.id;
+    bool replace_sampler =
+        xvg->draw_start.shape_sampler.id != 0 && xvg->draw_start.shape_sampler.id != grad->sampler.id;
+    if (tex_full || replace_sampler)
     {
         xvg_command_batch_draw(xvg, XVG_LABEL("_xvg_set_bound_texture"));
-        xvg->draw_start.shape_texture = grad->texture;
-        xvg->draw_start.shape_sampler = grad->sampler;
+
+        i                                = 0;
+        xvg->draw_start.shape_texture[i] = grad->texture;
     }
+
+        xvg->draw_start.shape_sampler = grad->sampler;
+
+    XVG_ASSERT(i < XVG_ARRLEN(xvg->draw_start.shape_texture));
+    return i + 1;
 }
 
 void xvg_draw_circle_with_gradient(XVG* xvg, float cx, float cy, float radius_px, float stroke_width, XVGGradient grad)
 {
+    unsigned tex_idx = _xvg_set_bound_texture(xvg, &grad);
+
     XVGShapeType shape_type = stroke_width > 0 ? XVG_SHAPE_CIRCLE_STROKE : XVG_SHAPE_CIRCLE_FILL;
     float        feather    = 2.0f / radius_px;
 
@@ -1042,7 +1080,7 @@ void xvg_draw_circle_with_gradient(XVG* xvg, float cx, float cy, float radius_px
     *shape             = (xvg_shape_t){
                     .topleft      = {cx - radius_px, cy - radius_px},
                     .bottomright  = {cx + radius_px, cy + radius_px},
-                    .sdf_data     = _xvg_compress_sdf_data(shape_type, grad.type, feather, stroke_width),
+                    .sdf_data     = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, feather, stroke_width),
                     .colour1      = grad.colour1,
                     .colour2      = grad.colour2,
                     .gradient_a   = {grad.gradient_a[0], grad.gradient_a[1]},
@@ -1059,13 +1097,13 @@ void xvg_draw_circle(XVG* xvg, float cx, float cy, float radius_px, float stroke
 
 void xvg_draw_solid_rectangle_with_gradient(XVG* xvg, int x, int y, int width, int height, XVGGradient grad)
 {
-    _xvg_set_bound_texture(xvg, &grad);
+    unsigned tex_idx = _xvg_set_bound_texture(xvg, &grad);
 
     xvg_shape_t* shape = _xvg_get_shape(xvg);
     *shape             = (xvg_shape_t){
                     .topleft             = {x, y},
                     .bottomright         = {x + width, y + height},
-                    .sdf_data            = _xvg_compress_sdf_data(XVG_SHAPE_RECTANGLE, grad.type, 0, 0),
+                    .sdf_data            = _xvg_compress_sdf_data(tex_idx, XVG_SHAPE_RECTANGLE, grad.type, 0, 0),
                     .borderradius_arcpie = 0,
                     .colour1             = grad.colour1,
                     .colour2             = grad.colour2,
@@ -1095,7 +1133,7 @@ void xvg_draw_rectangle_with_gradient_ex(
     float       stroke,
     XVGGradient grad)
 {
-    _xvg_set_bound_texture(xvg, &grad);
+    unsigned     tex_idx    = _xvg_set_bound_texture(xvg, &grad);
     XVGShapeType shape_type = stroke > 0 ? XVG_SHAPE_ROUNDED_RECTANGLE_STROKE : XVG_SHAPE_ROUNDED_RECTANGLE_FILL;
 
     // float feather = 4.0f / xm_minf(w, h);
@@ -1105,7 +1143,7 @@ void xvg_draw_rectangle_with_gradient_ex(
     *shape             = (xvg_shape_t){
                     .topleft             = {x, y},
                     .bottomright         = {x + w, y + h},
-                    .sdf_data            = _xvg_compress_sdf_data(shape_type, grad.type, feather, stroke),
+                    .sdf_data            = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, feather, stroke),
                     .borderradius_arcpie = _xvg_compress_border_radius(br_tr, br_br, br_tl, br_bl),
 
                     .colour1      = grad.colour1,
@@ -1146,7 +1184,7 @@ void xvg_draw_triangle_with_gradient(
     float       stroke,
     XVGGradient grad)
 {
-    _xvg_set_bound_texture(xvg, &grad);
+    unsigned     tex_idx    = _xvg_set_bound_texture(xvg, &grad);
     XVGShapeType shape_type = stroke > 0 ? XVG_SHAPE_TRIANGLE_STROKE : XVG_SHAPE_TRIANGLE_FILL;
     float        feather    = 4.0f / xm_minf(w, h);
 
@@ -1154,7 +1192,7 @@ void xvg_draw_triangle_with_gradient(
     *shape             = (xvg_shape_t){
                     .topleft             = {x, y},
                     .bottomright         = {x + w, y + h},
-                    .sdf_data            = _xvg_compress_sdf_data(shape_type, grad.type, feather, stroke),
+                    .sdf_data            = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, feather, stroke),
                     .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(rotate, 0),
                     .colour1             = grad.colour1,
                     .colour2             = grad.colour2,
@@ -1180,7 +1218,7 @@ void xvg_draw_pie_with_gradient(
     float       stroke_width,
     XVGGradient grad)
 {
-    _xvg_set_bound_texture(xvg, &grad);
+    unsigned     tex_idx      = _xvg_set_bound_texture(xvg, &grad);
     XVGShapeType shape_type   = stroke_width > 0 ? XVG_SHAPE_PIE_STROKE : XVG_SHAPE_PIE_FILL;
     float        feather      = 2.0f / radius_px;
     float        angle_range  = end_turn - start_turn;
@@ -1190,7 +1228,7 @@ void xvg_draw_pie_with_gradient(
     *shape             = (xvg_shape_t){
                     .topleft             = {cx - radius_px, cy - radius_px},
                     .bottomright         = {cx + radius_px, cy + radius_px},
-                    .sdf_data            = _xvg_compress_sdf_data(shape_type, grad.type, feather, stroke_width),
+                    .sdf_data            = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, feather, stroke_width),
                     .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(angle_rotate * 0.5f, angle_range * 0.5f),
                     .colour1             = grad.colour1,
                     .colour2             = grad.colour2,
@@ -1226,7 +1264,7 @@ void xvg_draw_arc_with_gradient(
     bool        butt,
     XVGGradient grad)
 {
-    _xvg_set_bound_texture(xvg, &grad);
+    unsigned tex_idx = _xvg_set_bound_texture(xvg, &grad);
 
     XVGShapeType shape_type = butt ? XVG_SHAPE_ARC_BUTT_STROKE : XVG_SHAPE_ARC_ROUND_STROKE;
     float        feather    = 2.0f / radius_px;
@@ -1249,7 +1287,7 @@ void xvg_draw_arc_with_gradient(
     *shape             = (xvg_shape_t){
                     .topleft             = {cx - radius_px, cy - radius_px},
                     .bottomright         = {cx + radius_px, cy + radius_px},
-                    .sdf_data            = _xvg_compress_sdf_data(shape_type, grad.type, feather, stroke_width * 0.5f),
+                    .sdf_data            = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, feather, stroke_width * 0.5f),
                     .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(rotate_turns, range_turns),
                     .colour1             = grad.colour1,
                     .colour2             = grad.colour2,
@@ -1295,7 +1333,7 @@ void xvg_draw_line_round_with_gradient(XVG* xvg, float x0, float y0, float x1, f
     *shape             = (xvg_shape_t){
                     .topleft             = {xl, yt},
                     .bottomright         = {xr, yb},
-                    .sdf_data            = _xvg_compress_sdf_data(XVG_SHAPE_LINE_ROUND, grad.type, feather, stroke * 0.5f),
+                    .sdf_data            = _xvg_compress_sdf_data(0, XVG_SHAPE_LINE_ROUND, grad.type, feather, stroke * 0.5f),
                     .borderradius_arcpie = stroke_offsets.u32,
                     .colour1             = grad.colour1,
                     .colour2             = grad.colour2,
@@ -1372,7 +1410,7 @@ void xvg_draw_line_plot(
     *shape             = (xvg_shape_t){
                     .topleft             = {x, y - stroke_width * 0.25f},
                     .bottomright         = {x + width, y + height + stroke_width * 0.25},
-                    .sdf_data            = _xvg_compress_sdf_data(XVG_SHAPE_LINE_PLOT, 0, feather, stroke_width),
+                    .sdf_data            = _xvg_compress_sdf_data(0, XVG_SHAPE_LINE_PLOT, 0, feather, stroke_width),
                     .borderradius_arcpie = _xvg_compress_border_radius(crop_br, crop_br, crop_br, crop_br),
                     .colour1             = colour,
                     .buffer_idx_range    = line_buffer_range,
@@ -2344,8 +2382,9 @@ void xvg_end_frame(XVG* xvg, int window_width, int window_height)
     }
 
     // Process commands
-    int         ncommands = 0;
-    XVGCommand* cmd       = xvg->first_command;
+    int         ncommands        = 0;
+    int         num_batch_groups = 0;
+    XVGCommand* cmd              = xvg->first_command;
     while (cmd != NULL)
     {
         switch (cmd->type)
@@ -2379,6 +2418,8 @@ void xvg_end_frame(XVG* xvg, int window_width, int window_height)
         }
         case XVG_CMD_DRAW:
         {
+            num_batch_groups++;
+
             XVGCommandDraw* draw = cmd->payload.draw;
 
             const int num_shapes = draw->shape_buffer_end - draw->shape_buffer_start;
@@ -2387,22 +2428,47 @@ void xvg_end_frame(XVG* xvg, int window_width, int window_height)
             {
                 sg_apply_pipeline(xvg->shapes.pip);
 
+                for (int i = 0; i < XVG_ARRLEN(draw->shape_texture); i++)
+                {
+                    if (draw->shape_texture[i].id == 0)
+                        draw->shape_texture[i] = xvg->fallback_img_view;
+                }
+
                 sg_apply_bindings(&(sg_bindings){
                     .views[VIEW_vs_xvg_shapes_buffer]      = xvg->shapes.sbv,
                     .views[VIEW_fs_xvg_shapes_line_buffer] = xvg->shapes.line_sbv,
-                    .views[VIEW_fs_xvg_shapes_tex]         = draw->shape_texture,
+                    .views[VIEW_fs_xvg_shapes_tex1]        = draw->shape_texture[0],
+                    .views[VIEW_fs_xvg_shapes_tex2]        = draw->shape_texture[1],
+                    .views[VIEW_fs_xvg_shapes_tex3]        = draw->shape_texture[2],
+                    .views[VIEW_fs_xvg_shapes_tex4]        = draw->shape_texture[3],
                     .samplers[SMP_fs_xvg_shapes_smp]       = draw->shape_sampler,
                 });
 
-                sg_view_desc             view_desc  = sg_query_view_desc(draw->shape_texture);
-                sg_image_desc            img_desc   = sg_query_image_desc(view_desc.texture.image);
-                unsigned                 img_width  = img_desc.width;
-                unsigned                 img_height = img_desc.height;
-                vs_xvg_shapes_uniforms_t uniforms   = {
+                vs_xvg_shapes_uniforms_t uniforms = {
                       .u_size                  = {window_width, window_height},
-                      .u_texture_size          = {img_width, img_height},
                       .u_storage_buffer_offset = draw->shape_buffer_start,
                 };
+
+                sg_image      img            = sg_query_view_desc(draw->shape_texture[0]).texture.image;
+                sg_image_desc img_desc       = sg_query_image_desc(img);
+                uniforms.u_texture_size_1[0] = img_desc.width;
+                uniforms.u_texture_size_1[1] = img_desc.height;
+
+                img                          = sg_query_view_desc(draw->shape_texture[1]).texture.image;
+                img_desc                     = sg_query_image_desc(img);
+                uniforms.u_texture_size_2[0] = img_desc.width;
+                uniforms.u_texture_size_2[1] = img_desc.height;
+
+                img                          = sg_query_view_desc(draw->shape_texture[2]).texture.image;
+                img_desc                     = sg_query_image_desc(img);
+                uniforms.u_texture_size_3[0] = img_desc.width;
+                uniforms.u_texture_size_3[1] = img_desc.height;
+
+                img                          = sg_query_view_desc(draw->shape_texture[3]).texture.image;
+                img_desc                     = sg_query_image_desc(img);
+                uniforms.u_texture_size_4[0] = img_desc.width;
+                uniforms.u_texture_size_4[1] = img_desc.height;
+
                 sg_apply_uniforms(UB_vs_xvg_shapes_uniforms, &SG_RANGE(uniforms));
                 sg_draw(0, 6 * num_shapes, 1);
             }

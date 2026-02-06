@@ -15,8 +15,8 @@ struct xvg_shape
     vec2 bottomright;
 
     // unorm4x8 comprised of:
-    //   - uint sdf_type;   // could probably be compressed to one byte
-    //   - uint grad_type;
+    //   - uint tex_idx;
+    //   - uint sdf_type && grad_type; // 4 bits each
     //   - float stroke_width;
     //   - float feather;
     uint sdf_data;
@@ -46,7 +46,10 @@ layout(binding=0) readonly buffer vs_xvg_shapes_buffer {
 
 layout(binding=0) uniform vs_xvg_shapes_uniforms {
     vec2 u_size;
-    vec2 u_texture_size;
+    vec2 u_texture_size_1;
+    vec2 u_texture_size_2;
+    vec2 u_texture_size_3;
+    vec2 u_texture_size_4;
     int  u_storage_buffer_offset;
 };
 
@@ -58,9 +61,11 @@ out vec2 texcoord;
 out flat float px_scale;
 out flat float px_inc;
 
-out flat uint buffer_idx_range;
+out flat uint tex_idx;
 out flat uint sdf_type;
 out flat uint grad_type;
+out flat uint buffer_idx_range;
+
 out flat float feather;
 out flat float stroke_width;
 
@@ -138,8 +143,9 @@ void main() {
 
     vec4 sdf_data = unpackUnorm4x8(vert.sdf_data);
 
-    uint sdf_and_grad_type = uint(sdf_data.x * 255);
+    uint sdf_and_grad_type = uint(sdf_data.y * 255);
 
+    tex_idx    = uint(sdf_data.x * 255);
     // sdf_type     = uint(sdf_data.x * 255);
     // grad_type    = uint(sdf_data.y * 255);
     sdf_type  = sdf_and_grad_type & 0xf;
@@ -222,8 +228,9 @@ void main() {
     vec2 texcoords_xy = unpackUnorm2x16(vert.texcoords_xy) * vec2(65535);
     vec2 texcoords_rb = unpackUnorm2x16(vert.texcoords_wh) * vec2(65535) + texcoords_xy;
 
-    texcoords_xy = texcoords_xy / u_texture_size;
-    texcoords_rb = texcoords_rb / u_texture_size;
+    vec2 texture_size = tex_idx == 1 ? u_texture_size_1 : tex_idx == 2 ? u_texture_size_2 : tex_idx == 3 ? u_texture_size_3 : tex_idx == 4 ? u_texture_size_4 : vec2(1);
+    texcoords_xy = texcoords_xy / texture_size;
+    texcoords_rb = texcoords_rb / texture_size;
 
     texcoord = vec2(
         is_right  ? texcoords_rb.x : texcoords_xy.x,
@@ -237,7 +244,10 @@ void main() {
 
 @fs fs_xvg_shapes
 precision mediump float;
-layout(binding=2) uniform texture2D fs_xvg_shapes_tex;
+layout(binding=2) uniform texture2D fs_xvg_shapes_tex1;
+layout(binding=3) uniform texture2D fs_xvg_shapes_tex2;
+layout(binding=4) uniform texture2D fs_xvg_shapes_tex3;
+layout(binding=5) uniform texture2D fs_xvg_shapes_tex4;
 layout(binding=0) uniform sampler fs_xvg_shapes_smp;
 
 struct xvg_line_segment {
@@ -254,11 +264,13 @@ in vec2 texcoord; // 16
 in flat float px_scale;
 in flat float px_inc;
 
+in flat uint tex_idx;
+in flat uint sdf_type;  // 32
+in flat uint grad_type; 
 in flat uint buffer_idx_range;
-in flat uint sdf_type; // 32
-in flat uint grad_type;
+
 in flat float feather;
-in flat float stroke_width; // 48
+in flat float stroke_width;  // 48
 
 in flat vec4 borderradius_arcpie; // 64
 
@@ -354,9 +366,18 @@ float sdSegment(in vec2 p, in vec2 a, in vec2 b)
 
 void main()
 {
+    vec4 col = vec4(1);
+    if (tex_idx == 1)
+        col = texture(sampler2D(fs_xvg_shapes_tex1, fs_xvg_shapes_smp), texcoord);
+    if (tex_idx == 2)
+        col = texture(sampler2D(fs_xvg_shapes_tex2, fs_xvg_shapes_smp), texcoord);
+    if (tex_idx == 3)
+        col = texture(sampler2D(fs_xvg_shapes_tex3, fs_xvg_shapes_smp), texcoord);
+    if (tex_idx == 4)
+        col = texture(sampler2D(fs_xvg_shapes_tex4, fs_xvg_shapes_smp), texcoord);
+
     vec2 p_scale = vec2(px_scale, 1);
     float shape = 1;
-    vec4 col = texture(sampler2D(fs_xvg_shapes_tex, fs_xvg_shapes_smp), texcoord);
     if (sdf_type == XVG_SHAPE_RECTANGLE_FILL)
     {
         vec2 b = p_scale;
