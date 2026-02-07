@@ -13,17 +13,8 @@
 // TODO: increase max stroke width for line plots
 // TODO: support fallback fonts for missing glyphs
 // TODO: support intelligent batching of text when using multiple atlases
-// TODO: support multiple command lists that can store draw calls independantly and be joined later
-         all draw commands will need to receive a ptr to the command list
-         eg.
-         struct XVGCommandList
-        {
-             XVG* xvg;
-             LinekdArena* arena;
-             ... other stuff
-        }
-        ...
-        xvg_draw_thing(XVGCommandList*, ...);
+         The simplest solution is probably to bind all atlases at once at include a atlas index to put in a switch case
+         in the text shader
 */
 
 // #ifdef __cplusplus
@@ -231,6 +222,7 @@ typedef struct XVG
 {
     LinkedArena* arena;
     void*        arena_top;
+    LinkedArena* frame_arena;
 
     float backingScaleFactor;
 
@@ -275,13 +267,13 @@ typedef struct XVG
 
         XVGAtlasRect* rects;
     } text;
-
 } XVG;
 
 typedef struct XVGCommandList
 {
-    LinkedArena* frame_arena; // owned
     XVG*         xvg;         // not owned
+    LinkedArena* arena;       // not owned
+    LinkedArena* frame_arena; // not owned
 
     struct XVGCommand* first_command;
     struct XVGCommand* current_command;
@@ -334,11 +326,10 @@ void xvg_init(XVG*);
 void xvg_deinit(XVG*);
 
 XVGCommandList* xvg_command_list_create(XVG*);
-void            xvg_command_list_destroy(XVGCommandList*);
 
 void xvg_begin_frame(XVG*);
 void xvg_end_frame(XVG*);
-void xvg_command_list_begin_frame(XVGCommandList* xcl, XVG*);
+void xvg_command_list_begin_frame(XVGCommandList* xcl);
 void xvg_command_list_end_frame(XVGCommandList* xvg, int window_width, int window_height);
 
 // Shapes
@@ -559,9 +550,9 @@ const XVGTextLayout* xvg_create_text_layout(
     unsigned        font_size,
     float           break_width,
     float           _line_height);
-static void xvg_release_text_layout(XVGCommandList* xvg, const XVGTextLayout* layout)
+static void xvg_release_text_layout(XVGCommandList* xcl, const XVGTextLayout* layout)
 {
-    linked_arena_release(xvg->xvg->arena, layout);
+    linked_arena_release(xcl->arena, layout);
 };
 void xvg_draw_text_layout(
     XVGCommandList*      xvg,
@@ -1862,14 +1853,14 @@ const XVGTextLayout* xvg_create_text_layout(
     font_size   *= backingScaleFactor;
     break_width *= backingScaleFactor;
 
-    XVGTextLayout* layout = linked_arena_alloc_clear(xvg->xvg->arena, sizeof(*layout));
+    XVGTextLayout* layout = linked_arena_alloc_clear(xvg->arena, sizeof(*layout));
     layout->cap_glyphs    = text_len * 2;
 
     layout->cap_rows = text_len >> 4;
     if (layout->cap_rows < 8)
         layout->cap_rows = 8;
-    XVGTextLayoutRow* rows   = linked_arena_alloc_clear(xvg->xvg->arena, sizeof(*rows) * layout->cap_rows);
-    XVGGlyphLayout*   glyphs = linked_arena_alloc(xvg->xvg->arena, sizeof(*glyphs) * layout->cap_glyphs);
+    XVGTextLayoutRow* rows   = linked_arena_alloc_clear(xvg->arena, sizeof(*rows) * layout->cap_rows);
+    XVGGlyphLayout*   glyphs = linked_arena_alloc(xvg->arena, sizeof(*glyphs) * layout->cap_glyphs);
     xvg_layout_set_rows(layout, rows);
     xvg_layout_set_glyphs(layout, glyphs);
 
@@ -2146,7 +2137,7 @@ void xvg_draw_text_layout(
     // at a time, and build a
     size_t          glyph_pos_len = layout->num_glyphs;
     XVGGlyphLayout* glyph_pos_1   = xvg_layout_get_glyphs(layout);
-    XVGGlyphLayout* glyph_pos_2   = linked_arena_alloc(xvg->xvg->arena, sizeof(*glyph_pos_2) * glyph_pos_len);
+    XVGGlyphLayout* glyph_pos_2   = linked_arena_alloc(xvg->arena, sizeof(*glyph_pos_2) * glyph_pos_len);
 
     int             glyphs_consumed      = 0;
     XVGGlyphLayout* search_glyphs        = glyph_pos_1;
@@ -2223,14 +2214,14 @@ void xvg_draw_text_ex(
     float           break_width,
     float           line_height)
 {
-    LINKED_ARENA_LEAK_DETECT_BEGIN(xvg->xvg->arena);
+    LINKED_ARENA_LEAK_DETECT_BEGIN(xvg->arena);
 
     const XVGTextLayout* layout =
         xvg_create_text_layout(xvg, text_start, text_end, font_size, break_width, line_height);
     xvg_draw_text_layout(xvg, layout, x, y, alignment, colour);
     xvg_release_text_layout(xvg, layout);
 
-    LINKED_ARENA_LEAK_DETECT_END(xvg->xvg->arena);
+    LINKED_ARENA_LEAK_DETECT_END(xvg->arena);
 }
 
 void xvg_draw_text(
@@ -2248,7 +2239,8 @@ void xvg_draw_text(
 
 void xvg_init(XVG* xvg)
 {
-    xvg->arena = linked_arena_create_ex(0, 1024 * 64);
+    xvg->arena       = linked_arena_create_ex(0, 1024 * 512); // 0.5mb
+    xvg->frame_arena = linked_arena_create_ex(0, 1024 * 64);
 
     xvg->backingScaleFactor = 1;
 
@@ -2364,7 +2356,7 @@ void xvg_deinit(XVG* xvg)
     }
     FT_Done_FreeType(xvg->text.ft_lib);
 
-    // linked_arena_destroy(xvg->frame_arena);
+    linked_arena_destroy(xvg->frame_arena);
     linked_arena_destroy(xvg->arena);
 }
 
@@ -2373,9 +2365,9 @@ XVGCommandList* xvg_command_list_create(XVG* xvg)
     XVGCommandList* xcl;
     xcl = linked_arena_alloc(xvg->arena, sizeof(*xcl));
 
-    LinkedArena* arena = linked_arena_create_ex(0, sizeof(*xcl));
-    xcl->xvg           = xvg;
-    xcl->frame_arena   = arena;
+    xcl->xvg         = xvg;
+    xcl->arena       = xvg->arena;
+    xcl->frame_arena = xvg->frame_arena;
 
     xcl->shapes.sbo = sg_make_buffer(&(sg_buffer_desc){
         .usage.storage_buffer = true,
@@ -2410,14 +2402,13 @@ XVGCommandList* xvg_command_list_create(XVG* xvg)
     return xcl;
 }
 
-void xvg_command_list_destroy(XVGCommandList* xcl) { linked_arena_destroy(xcl->frame_arena); }
-
 void xvg_begin_frame(XVG* xvg)
 {
     // Oh no, you forgot to call xvg_end_frame()
     // Or perhaps you called a function that caused you to continue processing in your or the OS's event loop
     XVG_ASSERT(xvg->arena_top == NULL);
-    xvg->arena_top             = linked_arena_get_top(xvg->arena);
+    xvg->arena_top = linked_arena_get_top(xvg->arena);
+    linked_arena_clear(xvg->frame_arena);
     xvg->text.current_font_idx = 0;
 }
 
@@ -2444,10 +2435,8 @@ void xvg_end_frame(XVG* xvg)
     }
 }
 
-void xvg_command_list_begin_frame(XVGCommandList* xcl, XVG* xvg)
+void xvg_command_list_begin_frame(XVGCommandList* xcl)
 {
-    linked_arena_clear(xcl->frame_arena);
-
     xcl->first_command   = NULL;
     xcl->current_command = NULL;
     memset(&xcl->draw_start, 0, sizeof(xcl->draw_start));
