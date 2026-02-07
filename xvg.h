@@ -232,21 +232,6 @@ typedef struct XVG
     LinkedArena* arena;
     void*        arena_top;
 
-    LinkedArena* frame_arena;
-
-    struct XVGCommand* first_command;
-    struct XVGCommand* current_command;
-
-    struct
-    {
-        int        shape_buffer_start;
-        sg_view    shape_texture[4];
-        sg_sampler shape_sampler;
-
-        int     text_buffer_start;
-        sg_view text_texture;
-    } draw_start;
-
     float backingScaleFactor;
 
     sg_sampler smp_linear;
@@ -257,19 +242,12 @@ typedef struct XVG
     struct
     {
         sg_pipeline pip;
-        sg_buffer   sbo;
-        sg_view     sbv;
-
-        sg_view   line_sbv;
-        sg_buffer line_sbo; // normalised y values
     } shapes;
 
     // Text pipeline
     struct
     {
         sg_pipeline pip;
-        sg_buffer   sbo;
-        sg_view     sbv;
         sg_sampler  smp;
 
         struct
@@ -298,6 +276,41 @@ typedef struct XVG
         XVGAtlasRect* rects;
     } text;
 
+} XVG;
+
+typedef struct XVGCommandList
+{
+    LinkedArena* frame_arena; // owned
+    XVG*         xvg;         // not owned
+
+    struct XVGCommand* first_command;
+    struct XVGCommand* current_command;
+
+    struct
+    {
+        int        shape_buffer_start;
+        sg_view    shape_texture[4];
+        sg_sampler shape_sampler;
+
+        int     text_buffer_start;
+        sg_view text_texture;
+    } draw_start;
+
+    struct
+    {
+        sg_buffer sbo;
+        sg_view   sbv;
+
+        sg_view   line_sbv;
+        sg_buffer line_sbo; // normalised y values
+    } shapes;
+
+    struct
+    {
+        sg_buffer sbo;
+        sg_view   sbv;
+    } text;
+
 #ifndef XVG_SHAPES_CAPACITY
 #define XVG_SHAPES_CAPACITY 1024
 #endif
@@ -315,13 +328,18 @@ typedef struct XVG
 #endif
     size_t     text_buffer_len;
     xvg_text_t text_buffer[XVG_MAX_GLYPHS];
-} XVG;
+} XVGCommandList;
 
 void xvg_init(XVG*);
 void xvg_deinit(XVG*);
 
+XVGCommandList* xvg_command_list_create(XVG*);
+void            xvg_command_list_destroy(XVGCommandList*);
+
 void xvg_begin_frame(XVG*);
-void xvg_end_frame(XVG*, int window_width, int window_height);
+void xvg_end_frame(XVG*);
+void xvg_command_list_begin_frame(XVGCommandList* xcl, XVG*);
+void xvg_command_list_end_frame(XVGCommandList* xvg, int window_width, int window_height);
 
 // Shapes
 // Unlike canvas style APIs, there are no 'fill' and 'stroke' commands. If 'stroke_width' is 0 the shape is implicitly
@@ -382,90 +400,105 @@ void xvg_gradient_apply_image(
     uint32_t     h);
 
 // Hard corners, edges snapped to pixels. Horizontal and vertical only
-void xvg_draw_solid_rectangle(XVG*, int x, int y, int width, int height, unsigned col);
-void xvg_draw_solid_rectangle_with_gradient(XVG*, int x, int y, int width, int height, XVGGradient grad);
+void xvg_draw_solid_rectangle(XVGCommandList*, int x, int y, int width, int height, unsigned col);
+void xvg_draw_solid_rectangle_with_gradient(XVGCommandList*, int x, int y, int width, int height, XVGGradient grad);
 
 // Soft corners & edges
-void xvg_draw_rectangle(XVG*, float x, float y, float w, float h, float br, float stroke_px, uint32_t col);
+void xvg_draw_rectangle(XVGCommandList*, float x, float y, float w, float h, float br, float stroke_px, uint32_t col);
 void xvg_draw_rectangle_with_gradient(
-    XVG*        xvg,
-    float       x,
-    float       y,
-    float       w,
-    float       h,
-    float       br,
-    float       stroke,
-    XVGGradient grad);
+    XVGCommandList* xvg,
+    float           x,
+    float           y,
+    float           w,
+    float           h,
+    float           br,
+    float           stroke,
+    XVGGradient     grad);
 void xvg_draw_rectangle_with_gradient_ex(
-    XVG*        xvg,
-    float       x,
-    float       y,
-    float       w,
-    float       h,
-    float       br_tr,
-    float       br_br,
-    float       br_tl,
-    float       br_bl,
-    float       stroke,
-    XVGGradient grad);
+    XVGCommandList* xvg,
+    float           x,
+    float           y,
+    float           w,
+    float           h,
+    float           br_tr,
+    float           br_br,
+    float           br_tl,
+    float           br_bl,
+    float           stroke,
+    XVGGradient     grad);
 
-void xvg_draw_circle(XVG*, float cx, float cy, float radius_px, float stroke_width, uint32_t col);
-void xvg_draw_circle_with_gradient(XVG*, float cx, float cy, float radius_px, float sw, XVGGradient grad);
+void xvg_draw_circle(XVGCommandList*, float cx, float cy, float radius_px, float stroke_width, uint32_t col);
+void xvg_draw_circle_with_gradient(XVGCommandList*, float cx, float cy, float radius_px, float sw, XVGGradient grad);
 
 // Equilateral triangle
-void xvg_draw_triangle(XVG*, float x, float y, float w, float h, float rotate, float stroke_px, uint32_t col);
+void xvg_draw_triangle(
+    XVGCommandList*,
+    float    x,
+    float    y,
+    float    w,
+    float    h,
+    float    rotate,
+    float    stroke_px,
+    uint32_t col);
 void xvg_draw_triangle_with_gradient(
-    XVG*        xvg,
-    float       x,
-    float       y,
-    float       w,
-    float       h,
-    float       rotate,
-    float       stroke,
-    XVGGradient grad);
+    XVGCommandList* xvg,
+    float           x,
+    float           y,
+    float           w,
+    float           h,
+    float           rotate,
+    float           stroke,
+    XVGGradient     grad);
 
 void xvg_draw_pie(
-    XVG*     xvg,
-    float    cx,
-    float    cy,
-    float    radius_px,
-    float    angle_start,
-    float    angle_end,
-    float    stroke_px,
-    uint32_t col);
+    XVGCommandList* xvg,
+    float           cx,
+    float           cy,
+    float           radius_px,
+    float           angle_start,
+    float           angle_end,
+    float           stroke_px,
+    uint32_t        col);
 void xvg_draw_pie_with_gradient(
-    XVG*        xvg,
-    float       cx,
-    float       cy,
-    float       radius_px,
-    float       angle_start,
-    float       angle_end,
-    float       stroke_px,
-    XVGGradient grad);
+    XVGCommandList* xvg,
+    float           cx,
+    float           cy,
+    float           radius_px,
+    float           angle_start,
+    float           angle_end,
+    float           stroke_px,
+    XVGGradient     grad);
 
 void xvg_draw_arc(
-    XVG*     xvg,
-    float    cx,
-    float    cy,
-    float    radius_px,
-    float    start_turn,
-    float    end_turn,
-    float    stroke_px,
-    bool     butt,
-    uint32_t col);
+    XVGCommandList* xvg,
+    float           cx,
+    float           cy,
+    float           radius_px,
+    float           start_turn,
+    float           end_turn,
+    float           stroke_px,
+    bool            butt,
+    uint32_t        col);
 void xvg_draw_arc_with_gradient(
-    XVG*        xvg,
-    float       cx,
-    float       cy,
-    float       radius_px,
-    float       start_turn,
-    float       end_turn,
-    float       stroke_px,
-    bool        butt,
-    XVGGradient grad);
+    XVGCommandList* xvg,
+    float           cx,
+    float           cy,
+    float           radius_px,
+    float           start_turn,
+    float           end_turn,
+    float           stroke_px,
+    bool            butt,
+    XVGGradient     grad);
 
-void xvg_draw_line_round_with_gradient(XVG*, float x0, float y0, float x1, float y1, float stroke, XVGGradient grad);
-void xvg_draw_line_round(XVG*, float x0, float y0, float x1, float y1, float stroke_width, unsigned col);
+void xvg_draw_line_round_with_gradient(
+    XVGCommandList*,
+    float       x0,
+    float       y0,
+    float       x1,
+    float       y1,
+    float       stroke,
+    XVGGradient grad);
+void xvg_draw_line_round(XVGCommandList*, float x0, float y0, float x1, float y1, float stroke_width, unsigned col);
 
 // 'data' is expected to be an array of 'width' length
 // 'data' is expected to contain normalised values where 0 == (y + height), and 1 == y
@@ -473,15 +506,15 @@ void xvg_draw_line_round(XVG*, float x0, float y0, float x1, float y1, float str
 // 'stroke_px' is limited to the range [1-2]
 // 'crop_border_radius' crops the line at the corners of the rectangle you're drawing
 void xvg_draw_line_plot(
-    XVG*         xvg,
-    int          x,
-    int          y,
-    int          w,
-    int          h,
-    const float* data,
-    float        crop_border_radius,
-    float        stroke_px,
-    uint32_t     col);
+    XVGCommandList* xvg,
+    int             x,
+    int             y,
+    int             w,
+    int             h,
+    const float*    data,
+    float           crop_border_radius,
+    float           stroke_px,
+    uint32_t        col);
 
 // FONTS
 // These functions return font IDs. 0 is considered to be invalid
@@ -499,38 +532,44 @@ XVGFont xvg_add_font_from_memory(XVG*, const void* font_data, size_t font_datale
 void xvg_set_font(XVG*, XVGFont);
 
 void xvg_draw_text(
-    XVG*        xvg,
-    float       x,
-    float       y,
-    const char* text_begin,
-    const char* text_end,
-    unsigned    font_size,
-    XVGAlign    align,
-    uint32_t    col);
+    XVGCommandList* xvg,
+    float           x,
+    float           y,
+    const char*     text_begin,
+    const char*     text_end,
+    unsigned        font_size,
+    XVGAlign        align,
+    uint32_t        col);
 void xvg_draw_text_ex(
-    XVG*        xvg,
-    float       x,
-    float       y,
-    const char* text_start,
-    const char* text_end,
-    unsigned    font_size,
-    XVGAlign    alignment,
-    uint32_t    colour,
-    float       break_width,
-    float       line_height);
+    XVGCommandList* xvg,
+    float           x,
+    float           y,
+    const char*     text_start,
+    const char*     text_end,
+    unsigned        font_size,
+    XVGAlign        alignment,
+    uint32_t        colour,
+    float           break_width,
+    float           line_height);
 
 const XVGTextLayout* xvg_create_text_layout(
-    XVG*        xvg,
-    const char* text_start,
-    const char* text_end,
-    unsigned    font_size,
-    float       break_width,
-    float       _line_height);
-static void xvg_release_text_layout(XVG* xvg, const XVGTextLayout* layout)
+    XVGCommandList* xvg,
+    const char*     text_start,
+    const char*     text_end,
+    unsigned        font_size,
+    float           break_width,
+    float           _line_height);
+static void xvg_release_text_layout(XVGCommandList* xvg, const XVGTextLayout* layout)
 {
-    linked_arena_release(xvg->arena, layout);
+    linked_arena_release(xvg->xvg->arena, layout);
 };
-void xvg_draw_text_layout(XVG* xvg, const XVGTextLayout* layout, int x, int y, int alignment, uint32_t colour);
+void xvg_draw_text_layout(
+    XVGCommandList*      xvg,
+    const XVGTextLayout* layout,
+    int                  x,
+    int                  y,
+    int                  alignment,
+    uint32_t             colour);
 
 // Commands
 typedef struct XVGCommandBeginPass
@@ -592,12 +631,12 @@ typedef struct XVGCommand
     struct XVGCommand* next;
 } XVGCommand;
 
-void xvg_command_begin_pass(XVG*, const sg_pass*, const char* label);
-void xvg_command_end_pass(XVG*, const char* label);
-void xvg_command_set_scissor(XVG*, int x, int y, int w, int h, const char* label);
-void xvg_command_set_viewport(XVG*, int x, int y, int w, int h, const char* label);
-void xvg_command_batch_draw(XVG*, const char* label);
-void xvg_command_custom(XVG*, void* uptr, XVGCustomFunc func, const char* label);
+void xvg_command_begin_pass(XVGCommandList*, const sg_pass*, const char* label);
+void xvg_command_end_pass(XVGCommandList*, const char* label);
+void xvg_command_set_scissor(XVGCommandList*, int x, int y, int w, int h, const char* label);
+void xvg_command_set_viewport(XVGCommandList*, int x, int y, int w, int h, const char* label);
+void xvg_command_batch_draw(XVGCommandList*, const char* label);
+void xvg_command_custom(XVGCommandList*, void* uptr, XVGCustomFunc func, const char* label);
 
 sg_image xvg_make_image_with_mipmaps(const sg_image_desc* desc_);
 
@@ -804,7 +843,7 @@ uint32_t _xvg_pack_xy_coord(int x, int y)
     return v.u32;
 }
 
-XVGCommand* _xvg_alloc_command(XVG* xvg, XVGCommandType type, const char* label)
+XVGCommand* _xvg_alloc_command(XVGCommandList* xvg, XVGCommandType type, const char* label)
 {
     XVGCommand* cmd = linked_arena_alloc_clear(xvg->frame_arena, sizeof(*cmd));
 
@@ -825,7 +864,7 @@ XVGCommand* _xvg_alloc_command(XVG* xvg, XVGCommandType type, const char* label)
     return cmd;
 }
 
-void xvg_command_begin_pass(XVG* xvg, const sg_pass* pass, const char* label)
+void xvg_command_begin_pass(XVGCommandList* xvg, const sg_pass* pass, const char* label)
 {
     XVGCommand*          cmd = _xvg_alloc_command(xvg, XVG_CMD_BEGIN_PASS, label);
     XVGCommandBeginPass* bp  = linked_arena_alloc_clear(xvg->frame_arena, sizeof(*bp));
@@ -834,14 +873,14 @@ void xvg_command_begin_pass(XVG* xvg, const sg_pass* pass, const char* label)
     bp->pass = *pass;
 }
 
-void xvg_command_end_pass(XVG* xvg, const char* label)
+void xvg_command_end_pass(XVGCommandList* xvg, const char* label)
 {
     xvg_command_batch_draw(xvg, XVG_LABEL("xvg_command_end_pass()"));
 
     _xvg_alloc_command(xvg, XVG_CMD_END_PASS, label);
 }
 
-void xvg_command_set_scissor(XVG* xvg, int x, int y, int w, int h, const char* label)
+void xvg_command_set_scissor(XVGCommandList* xvg, int x, int y, int w, int h, const char* label)
 {
     xvg_command_batch_draw(xvg, XVG_LABEL("xvg_command_set_scissor()"));
 
@@ -855,7 +894,7 @@ void xvg_command_set_scissor(XVG* xvg, int x, int y, int w, int h, const char* l
     ss->h = h;
 }
 
-void xvg_command_set_viewport(XVG* xvg, int x, int y, int w, int h, const char* label)
+void xvg_command_set_viewport(XVGCommandList* xvg, int x, int y, int w, int h, const char* label)
 {
     xvg_command_batch_draw(xvg, XVG_LABEL("xvg_command_set_viewport()"));
 
@@ -869,7 +908,7 @@ void xvg_command_set_viewport(XVG* xvg, int x, int y, int w, int h, const char* 
     sv->h = h;
 }
 
-void xvg_command_batch_draw(XVG* xvg, const char* label)
+void xvg_command_batch_draw(XVGCommandList* xvg, const char* label)
 {
     if (xvg->draw_start.shape_buffer_start == xvg->shapes_buffer_len &&
         xvg->draw_start.text_buffer_start == xvg->text_buffer_len)
@@ -887,7 +926,7 @@ void xvg_command_batch_draw(XVG* xvg, const char* label)
     draw->shape_texture[1]   = xvg->draw_start.shape_texture[1];
     draw->shape_texture[2]   = xvg->draw_start.shape_texture[2];
     draw->shape_texture[3]   = xvg->draw_start.shape_texture[3];
-    draw->shape_sampler = xvg->draw_start.shape_sampler.id ? xvg->draw_start.shape_sampler : xvg->smp_nearest_neighbour;
+    draw->shape_sampler      = xvg->draw_start.shape_sampler;
 
     draw->text_buffer_start = xvg->draw_start.text_buffer_start;
     draw->text_buffer_end   = xvg->text_buffer_len;
@@ -903,7 +942,7 @@ void xvg_command_batch_draw(XVG* xvg, const char* label)
     xvg->draw_start.text_texture.id     = 0;
 }
 
-void xvg_command_custom(XVG* xvg, void* uptr, XVGCustomFunc func, const char* label)
+void xvg_command_custom(XVGCommandList* xvg, void* uptr, XVGCustomFunc func, const char* label)
 {
     xvg_command_batch_draw(xvg, XVG_LABEL("xvg_command_custom()"));
 
@@ -922,7 +961,7 @@ void xvg_command_custom(XVG* xvg, void* uptr, XVGCustomFunc func, const char* la
 // ███████║██║  ██║██║  ██║██║     ███████╗███████║
 // ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚══════╝╚══════╝
 
-xvg_shape_t* _xvg_get_shape(XVG* xvg)
+xvg_shape_t* _xvg_get_shape(XVGCommandList* xvg)
 {
     // Branchless
     static xvg_shape_t stub;
@@ -1034,7 +1073,7 @@ xvg_make_image_fill(sg_view texture, sg_sampler sampler, uint32_t x, uint32_t y,
 }
 
 // Returns tex_idx
-unsigned _xvg_set_bound_texture(XVG* xvg, const XVGGradient* grad)
+unsigned _xvg_set_bound_texture(XVGCommandList* xvg, const XVGGradient* grad)
 {
     if (grad->texture.id == 0)
         return 0;
@@ -1063,13 +1102,19 @@ unsigned _xvg_set_bound_texture(XVG* xvg, const XVGGradient* grad)
         xvg->draw_start.shape_texture[i] = grad->texture;
     }
 
-        xvg->draw_start.shape_sampler = grad->sampler;
+    xvg->draw_start.shape_sampler = grad->sampler;
 
     XVG_ASSERT(i < XVG_ARRLEN(xvg->draw_start.shape_texture));
     return i + 1;
 }
 
-void xvg_draw_circle_with_gradient(XVG* xvg, float cx, float cy, float radius_px, float stroke_width, XVGGradient grad)
+void xvg_draw_circle_with_gradient(
+    XVGCommandList* xvg,
+    float           cx,
+    float           cy,
+    float           radius_px,
+    float           stroke_width,
+    XVGGradient     grad)
 {
     unsigned tex_idx = _xvg_set_bound_texture(xvg, &grad);
 
@@ -1089,13 +1134,13 @@ void xvg_draw_circle_with_gradient(XVG* xvg, float cx, float cy, float radius_px
                     .texcoords_wh = grad.wh,
     };
 }
-void xvg_draw_circle(XVG* xvg, float cx, float cy, float radius_px, float stroke_width, uint32_t col)
+void xvg_draw_circle(XVGCommandList* xvg, float cx, float cy, float radius_px, float stroke_width, uint32_t col)
 {
     XVGGradient grad = {.colour1 = col};
     xvg_draw_circle_with_gradient(xvg, cx, cy, radius_px, stroke_width, grad);
 }
 
-void xvg_draw_solid_rectangle_with_gradient(XVG* xvg, int x, int y, int width, int height, XVGGradient grad)
+void xvg_draw_solid_rectangle_with_gradient(XVGCommandList* xvg, int x, int y, int width, int height, XVGGradient grad)
 {
     unsigned tex_idx = _xvg_set_bound_texture(xvg, &grad);
 
@@ -1114,24 +1159,24 @@ void xvg_draw_solid_rectangle_with_gradient(XVG* xvg, int x, int y, int width, i
     };
 }
 
-void xvg_draw_solid_rectangle(XVG* xvg, int x, int y, int width, int height, unsigned col)
+void xvg_draw_solid_rectangle(XVGCommandList* xvg, int x, int y, int width, int height, unsigned col)
 {
     XVGGradient grad = {.colour1 = col};
     xvg_draw_solid_rectangle_with_gradient(xvg, x, y, width, height, grad);
 }
 
 void xvg_draw_rectangle_with_gradient_ex(
-    XVG*        xvg,
-    float       x,
-    float       y,
-    float       w,
-    float       h,
-    float       br_tr,
-    float       br_br,
-    float       br_tl,
-    float       br_bl,
-    float       stroke,
-    XVGGradient grad)
+    XVGCommandList* xvg,
+    float           x,
+    float           y,
+    float           w,
+    float           h,
+    float           br_tr,
+    float           br_br,
+    float           br_tl,
+    float           br_bl,
+    float           stroke,
+    XVGGradient     grad)
 {
     unsigned     tex_idx    = _xvg_set_bound_texture(xvg, &grad);
     XVGShapeType shape_type = stroke > 0 ? XVG_SHAPE_ROUNDED_RECTANGLE_STROKE : XVG_SHAPE_ROUNDED_RECTANGLE_FILL;
@@ -1155,34 +1200,42 @@ void xvg_draw_rectangle_with_gradient_ex(
     };
 }
 
-void xvg_draw_rectangle(XVG* xvg, float x, float y, float w, float h, float br, float stroke_width, uint32_t col)
+void xvg_draw_rectangle(
+    XVGCommandList* xvg,
+    float           x,
+    float           y,
+    float           w,
+    float           h,
+    float           br,
+    float           stroke_width,
+    uint32_t        col)
 {
     XVGGradient grad = {.colour1 = col};
     xvg_draw_rectangle_with_gradient_ex(xvg, x, y, w, h, br, br, br, br, stroke_width, grad);
 }
 
 void xvg_draw_rectangle_with_gradient(
-    XVG*        xvg,
-    float       x,
-    float       y,
-    float       w,
-    float       h,
-    float       br,
-    float       stroke_width,
-    XVGGradient grad)
+    XVGCommandList* xvg,
+    float           x,
+    float           y,
+    float           w,
+    float           h,
+    float           br,
+    float           stroke_width,
+    XVGGradient     grad)
 {
     xvg_draw_rectangle_with_gradient_ex(xvg, x, y, w, h, br, br, br, br, stroke_width, grad);
 }
 
 void xvg_draw_triangle_with_gradient(
-    XVG*        xvg,
-    float       x,
-    float       y,
-    float       w,
-    float       h,
-    float       rotate,
-    float       stroke,
-    XVGGradient grad)
+    XVGCommandList* xvg,
+    float           x,
+    float           y,
+    float           w,
+    float           h,
+    float           rotate,
+    float           stroke,
+    XVGGradient     grad)
 {
     unsigned     tex_idx    = _xvg_set_bound_texture(xvg, &grad);
     XVGShapeType shape_type = stroke > 0 ? XVG_SHAPE_TRIANGLE_STROKE : XVG_SHAPE_TRIANGLE_FILL;
@@ -1202,21 +1255,29 @@ void xvg_draw_triangle_with_gradient(
                     .texcoords_wh        = grad.wh,
     };
 }
-void xvg_draw_triangle(XVG* xvg, float x, float y, float w, float h, float rotate, float stroke_width, uint32_t colour)
+void xvg_draw_triangle(
+    XVGCommandList* xvg,
+    float           x,
+    float           y,
+    float           w,
+    float           h,
+    float           rotate,
+    float           stroke_width,
+    uint32_t        colour)
 {
     XVGGradient grad = {.colour1 = colour};
     xvg_draw_triangle_with_gradient(xvg, x, y, w, h, rotate, stroke_width, grad);
 }
 
 void xvg_draw_pie_with_gradient(
-    XVG*        xvg,
-    float       cx,
-    float       cy,
-    float       radius_px,
-    float       start_turn,
-    float       end_turn,
-    float       stroke_width,
-    XVGGradient grad)
+    XVGCommandList* xvg,
+    float           cx,
+    float           cy,
+    float           radius_px,
+    float           start_turn,
+    float           end_turn,
+    float           stroke_width,
+    XVGGradient     grad)
 {
     unsigned     tex_idx      = _xvg_set_bound_texture(xvg, &grad);
     XVGShapeType shape_type   = stroke_width > 0 ? XVG_SHAPE_PIE_STROKE : XVG_SHAPE_PIE_FILL;
@@ -1240,29 +1301,29 @@ void xvg_draw_pie_with_gradient(
 }
 
 void xvg_draw_pie(
-    XVG*     xvg,
-    float    cx,
-    float    cy,
-    float    radius_px,
-    float    start_turn,
-    float    end_turn,
-    float    stroke_width,
-    uint32_t colour)
+    XVGCommandList* xvg,
+    float           cx,
+    float           cy,
+    float           radius_px,
+    float           start_turn,
+    float           end_turn,
+    float           stroke_width,
+    uint32_t        colour)
 {
     XVGGradient grad = {.colour1 = colour};
     xvg_draw_pie_with_gradient(xvg, cx, cy, radius_px, start_turn, end_turn, stroke_width, grad);
 }
 
 void xvg_draw_arc_with_gradient(
-    XVG*        xvg,
-    float       cx,
-    float       cy,
-    float       radius_px,
-    float       start_turn,
-    float       end_turn,
-    float       stroke_width,
-    bool        butt,
-    XVGGradient grad)
+    XVGCommandList* xvg,
+    float           cx,
+    float           cy,
+    float           radius_px,
+    float           start_turn,
+    float           end_turn,
+    float           stroke_width,
+    bool            butt,
+    XVGGradient     grad)
 {
     unsigned tex_idx = _xvg_set_bound_texture(xvg, &grad);
 
@@ -1299,21 +1360,28 @@ void xvg_draw_arc_with_gradient(
 }
 
 void xvg_draw_arc(
-    XVG*     xvg,
-    float    cx,
-    float    cy,
-    float    radius_px,
-    float    start_turn,
-    float    end_turn,
-    float    stroke_width,
-    bool     butt,
-    uint32_t colour)
+    XVGCommandList* xvg,
+    float           cx,
+    float           cy,
+    float           radius_px,
+    float           start_turn,
+    float           end_turn,
+    float           stroke_width,
+    bool            butt,
+    uint32_t        colour)
 {
     XVGGradient grad = {.colour1 = colour};
     xvg_draw_arc_with_gradient(xvg, cx, cy, radius_px, start_turn, end_turn, stroke_width, butt, grad);
 }
 
-void xvg_draw_line_round_with_gradient(XVG* xvg, float x0, float y0, float x1, float y1, float stroke, XVGGradient grad)
+void xvg_draw_line_round_with_gradient(
+    XVGCommandList* xvg,
+    float           x0,
+    float           y0,
+    float           x1,
+    float           y1,
+    float           stroke,
+    XVGGradient     grad)
 {
     float xl = xm_minf(x0, x1) - stroke;
     float xr = xm_maxf(x0, x1) + stroke;
@@ -1344,26 +1412,27 @@ void xvg_draw_line_round_with_gradient(XVG* xvg, float x0, float y0, float x1, f
     };
 }
 
-void xvg_draw_line_round(XVG* xvg, float x0, float y0, float x1, float y1, float stroke_width, unsigned col)
+void xvg_draw_line_round(XVGCommandList* xvg, float x0, float y0, float x1, float y1, float stroke_width, unsigned col)
 {
     XVGGradient grad = {.colour1 = col};
     xvg_draw_line_round_with_gradient(xvg, x0, y0, x1, y1, stroke_width, grad);
 }
 
 void xvg_draw_line_plot(
-    XVG*         xvg,
-    int          x,
-    int          y,
-    int          width,
-    int          height,
-    const float* data,
-    float        crop_br,
-    float        stroke_width,
-    uint32_t     colour)
+    XVGCommandList* xvg,
+    int             x,
+    int             y,
+    int             width,
+    int             height,
+    const float*    data,
+    float           crop_br,
+    float           stroke_width,
+    uint32_t        colour)
 {
-    size_t remaining_capacity = XVG_ARRLEN(xvg->line_buffer) - xvg->line_buffer_len;
+    size_t    remaining_capacity = XVG_ARRLEN(xvg->line_buffer) - xvg->line_buffer_len;
+    const int backingScaleFactor = xvg->xvg->backingScaleFactor;
 
-    int N = width * xvg->backingScaleFactor;
+    int N = width * backingScaleFactor;
 
     if (N > remaining_capacity)
         N = 0;
@@ -1375,7 +1444,7 @@ void xvg_draw_line_plot(
     const uint32_t begin_idx = xvg->line_buffer_len;
     const uint32_t end_idx   = xvg->line_buffer_len + N;
 
-    if (xvg->backingScaleFactor == 2)
+    if (backingScaleFactor == 2)
     {
         // Plain old linear interpolation
         xvg_line_segment_t* dst      = xvg->line_buffer + begin_idx;
@@ -1396,7 +1465,7 @@ void xvg_draw_line_plot(
     }
     else
     {
-        xassert(xvg->backingScaleFactor == 1);
+        xassert(backingScaleFactor == 1);
         xstatic_assert(sizeof(xvg->line_buffer[0]) == sizeof(data[0]), "Must match");
         memcpy(xvg->line_buffer + begin_idx, data, N * sizeof(xvg->line_buffer[0]));
     }
@@ -1694,7 +1763,7 @@ XVGAtlasRect _xvg_get_glyph(XVG* xvg, uint32_t glyph_index, unsigned font_size)
     return stub;
 }
 
-xvg_text_t* _xvg_get_text(XVG* xvg)
+xvg_text_t* _xvg_get_text(XVGCommandList* xvg)
 {
     static xvg_text_t stub;
 
@@ -1707,7 +1776,7 @@ xvg_text_t* _xvg_get_text(XVG* xvg)
     return ret;
 }
 
-bool _xvg_push_glyph(XVG* xvg, int pen_x, int pen_y, const XVGAtlasRect* rect, uint32_t colour)
+bool _xvg_push_glyph(XVGCommandList* xvg, int pen_x, int pen_y, const XVGAtlasRect* rect, uint32_t colour)
 {
     bool should_push = rect->img_view.id != 0;
     XVG_ASSERT(should_push);
@@ -1775,35 +1844,36 @@ void xvg__endRow(XVG* xvg, XVGTextLayout* layout, int ymin, int ymax, int cursor
 
 // Lazy and fast layout
 const XVGTextLayout* xvg_create_text_layout(
-    XVG*        xvg,
-    const char* text_start,
-    const char* text_end,
-    unsigned    font_size,
-    float       break_width,
-    float       _line_height)
+    XVGCommandList* xvg,
+    const char*     text_start,
+    const char*     text_end,
+    unsigned        font_size,
+    float           break_width,
+    float           _line_height)
 {
     static const XVGTextLayout stub = {0};
 
     XVG_ASSERT(font_size < 128);
     if (text_end == NULL)
         text_end = text_start + strlen(text_start);
-    const size_t text_len = text_end - text_start;
+    const size_t text_len           = text_end - text_start;
+    const int    backingScaleFactor = xvg->xvg->backingScaleFactor;
 
-    font_size   *= xvg->backingScaleFactor;
-    break_width *= xvg->backingScaleFactor;
+    font_size   *= backingScaleFactor;
+    break_width *= backingScaleFactor;
 
-    XVGTextLayout* layout = linked_arena_alloc_clear(xvg->arena, sizeof(*layout));
+    XVGTextLayout* layout = linked_arena_alloc_clear(xvg->xvg->arena, sizeof(*layout));
     layout->cap_glyphs    = text_len * 2;
 
     layout->cap_rows = text_len >> 4;
     if (layout->cap_rows < 8)
         layout->cap_rows = 8;
-    XVGTextLayoutRow* rows   = linked_arena_alloc_clear(xvg->arena, sizeof(*rows) * layout->cap_rows);
-    XVGGlyphLayout*   glyphs = linked_arena_alloc(xvg->arena, sizeof(*glyphs) * layout->cap_glyphs);
+    XVGTextLayoutRow* rows   = linked_arena_alloc_clear(xvg->xvg->arena, sizeof(*rows) * layout->cap_rows);
+    XVGGlyphLayout*   glyphs = linked_arena_alloc(xvg->xvg->arena, sizeof(*glyphs) * layout->cap_glyphs);
     xvg_layout_set_rows(layout, rows);
     xvg_layout_set_glyphs(layout, glyphs);
 
-    XVGFontSlot* sl = _xvg_get_current_font_slot(xvg);
+    XVGFontSlot* sl = _xvg_get_current_font_slot(xvg->xvg);
     if (!sl->ft_face)
         return &stub;
 
@@ -1830,7 +1900,7 @@ const XVGTextLayout* xvg_create_text_layout(
     int     line_ymax = 0, line_ymin = 0;
     int     layout_xmax = 0;
 
-    rows                       = xvg__startRow(xvg, layout);
+    rows                       = xvg__startRow(xvg->xvg, layout);
     const char* iter           = text_start;
     unsigned    prev_glyph_idx = 0;
 
@@ -1848,8 +1918,8 @@ const XVGTextLayout* xvg_create_text_layout(
         {
             layout_xmax = xm_maxi(layout_xmax, line_xmax);
 
-            xvg__endRow(xvg, layout, line_ymin, line_ymax, CursorY >> 6);
-            rows = xvg__startRow(xvg, layout);
+            xvg__endRow(xvg->xvg, layout, line_ymin, line_ymax, CursorY >> 6);
+            rows = xvg__startRow(xvg->xvg, layout);
 
             prev_glyph_idx = 0;
             line_xmin      = 0;
@@ -1870,7 +1940,7 @@ const XVGTextLayout* xvg_create_text_layout(
             unsigned glyph_idx = FT_Get_Char_Index(face, cp);
             XVG_ASSERT(glyph_idx != 0);
 
-            XVGAtlasRect rect = _xvg_get_glyph(xvg, glyph_idx, font_size);
+            XVGAtlasRect rect = _xvg_get_glyph(xvg->xvg, glyph_idx, font_size);
 
             bool add_to_metadata = layout->num_glyphs < layout->cap_glyphs;
 
@@ -1910,8 +1980,8 @@ const XVGTextLayout* xvg_create_text_layout(
                 // Break word
                 XVG_ASSERT(layout->num_rows);
                 XVG_ASSERT(num_glyphs_at_last_space <= layout->num_glyphs);
-                xvg__endRow(xvg, layout, line_ymin, line_ymax, (CursorY + line_height) >> 6);
-                rows = xvg__startRow(xvg, layout);
+                xvg__endRow(xvg->xvg, layout, line_ymin, line_ymax, (CursorY + line_height) >> 6);
+                rows = xvg__startRow(xvg->xvg, layout);
 
                 XVGTextLayoutRow* prev_row    = &rows[layout->num_rows - 2];
                 XVGTextLayoutRow* current_row = &rows[layout->num_rows - 1];
@@ -1981,7 +2051,7 @@ const XVGTextLayout* xvg_create_text_layout(
         }
     }
     layout_xmax = xm_maxi(layout_xmax, line_xmax);
-    xvg__endRow(xvg, layout, line_ymin, line_ymax, CursorY >> 6);
+    xvg__endRow(xvg->xvg, layout, line_ymin, line_ymax, CursorY >> 6);
     layout->xmax = layout_xmax;
 
     layout->total_height       = (CursorY + (m->ascender - m->descender)) >> 6;
@@ -2015,10 +2085,16 @@ const XVGTextLayout* xvg_create_text_layout(
     return layout;
 }
 
-void xvg_draw_text_layout(XVG* xvg, const XVGTextLayout* layout, int x, int y, int alignment, uint32_t colour)
+void xvg_draw_text_layout(
+    XVGCommandList*      xvg,
+    const XVGTextLayout* layout,
+    int                  x,
+    int                  y,
+    int                  alignment,
+    uint32_t             colour)
 {
-    x *= xvg->backingScaleFactor;
-    y *= xvg->backingScaleFactor;
+    x *= xvg->xvg->backingScaleFactor;
+    y *= xvg->xvg->backingScaleFactor;
 
     const XVGTextLayoutRow* rows = xvg_layout_get_rows(layout);
 
@@ -2070,7 +2146,7 @@ void xvg_draw_text_layout(XVG* xvg, const XVGTextLayout* layout, int x, int y, i
     // at a time, and build a
     size_t          glyph_pos_len = layout->num_glyphs;
     XVGGlyphLayout* glyph_pos_1   = xvg_layout_get_glyphs(layout);
-    XVGGlyphLayout* glyph_pos_2   = linked_arena_alloc(xvg->arena, sizeof(*glyph_pos_2) * glyph_pos_len);
+    XVGGlyphLayout* glyph_pos_2   = linked_arena_alloc(xvg->xvg->arena, sizeof(*glyph_pos_2) * glyph_pos_len);
 
     int             glyphs_consumed      = 0;
     XVGGlyphLayout* search_glyphs        = glyph_pos_1;
@@ -2136,44 +2212,43 @@ void xvg_draw_text_layout(XVG* xvg, const XVGTextLayout* layout, int x, int y, i
 }
 
 void xvg_draw_text_ex(
-    XVG*        xvg,
-    float       x,
-    float       y,
-    const char* text_start,
-    const char* text_end,
-    unsigned    font_size,
-    XVGAlign    alignment,
-    uint32_t    colour,
-    float       break_width,
-    float       line_height)
+    XVGCommandList* xvg,
+    float           x,
+    float           y,
+    const char*     text_start,
+    const char*     text_end,
+    unsigned        font_size,
+    XVGAlign        alignment,
+    uint32_t        colour,
+    float           break_width,
+    float           line_height)
 {
-    LINKED_ARENA_LEAK_DETECT_BEGIN(xvg->arena);
+    LINKED_ARENA_LEAK_DETECT_BEGIN(xvg->xvg->arena);
 
     const XVGTextLayout* layout =
         xvg_create_text_layout(xvg, text_start, text_end, font_size, break_width, line_height);
     xvg_draw_text_layout(xvg, layout, x, y, alignment, colour);
     xvg_release_text_layout(xvg, layout);
 
-    LINKED_ARENA_LEAK_DETECT_END(xvg->arena);
+    LINKED_ARENA_LEAK_DETECT_END(xvg->xvg->arena);
 }
 
 void xvg_draw_text(
-    XVG*        xvg,
-    float       x,
-    float       y,
-    const char* text_start,
-    const char* text_end,
-    unsigned    font_size,
-    XVGAlign    alignment,
-    uint32_t    colour)
+    XVGCommandList* xvg,
+    float           x,
+    float           y,
+    const char*     text_start,
+    const char*     text_end,
+    unsigned        font_size,
+    XVGAlign        alignment,
+    uint32_t        colour)
 {
     xvg_draw_text_ex(xvg, x, y, text_start, text_end, font_size, alignment, colour, 0, 1);
 }
 
 void xvg_init(XVG* xvg)
 {
-    xvg->arena       = linked_arena_create_ex(0, 1024 * 64);
-    xvg->frame_arena = linked_arena_create_ex(0, 1024 * 64);
+    xvg->arena = linked_arena_create_ex(0, 1024 * 64);
 
     xvg->backingScaleFactor = 1;
 
@@ -2217,54 +2292,24 @@ void xvg_init(XVG* xvg)
 
         xvg->fallback_img      = sg_make_image(&(sg_image_desc){
                  .width              = 1,
-                                                                .height             = 1,
-                                                                .pixel_format       = SG_PIXELFORMAT_RGBA8,
-                                                                .data.mip_levels[0] = {
-                                                                    .ptr  = &pixel_white,
-                                                                    .size = sizeof(pixel_white),
-                                                           }});
+                 .height             = 1,
+                 .pixel_format       = SG_PIXELFORMAT_RGBA8,
+                 .data.mip_levels[0] = {
+                     .ptr  = &pixel_white,
+                     .size = sizeof(pixel_white),
+            }});
         xvg->fallback_img_view = sg_make_view(&(sg_view_desc){.texture = xvg->fallback_img});
 
         xvg->shapes.pip = sg_make_pipeline(&(sg_pipeline_desc){
             .shader    = sg_make_shader(_xvg_shapes_shader_desc(sg_query_backend())),
-                                                 .colors[0] = BLEND_DEFAULT,
-                                                 .label     = XVG_LABEL("xvg-shapes-pipeline")});
-
-        xvg->shapes.sbo = sg_make_buffer(&(sg_buffer_desc){
-            .usage.storage_buffer = true,
-            .usage.stream_update  = true,
-            .size                 = sizeof(xvg->shapes_buffer),
-            .label                = XVG_LABEL("xvg-shapes"),
-        });
-        xvg->shapes.sbv = sg_make_view(&(sg_view_desc){
-            .storage_buffer = xvg->shapes.sbo,
-        });
-
-        xvg->shapes.line_sbo = sg_make_buffer(&(sg_buffer_desc){
-            .usage.storage_buffer = true,
-            .usage.stream_update  = true,
-            .size                 = sizeof(xvg->line_buffer),
-            .label                = XVG_LABEL("xvg-line-buffer"),
-        });
-        xvg->shapes.line_sbv = sg_make_view(&(sg_view_desc){.storage_buffer = xvg->shapes.line_sbo});
+            .colors[0] = BLEND_DEFAULT,
+            .label     = XVG_LABEL("xvg-shapes-pipeline")});
     }
 
     // Text
     {
         int ft_err = FT_Init_FreeType(&xvg->text.ft_lib);
         XVG_ASSERT(ft_err == 0);
-
-        xvg->text.sbo = sg_make_buffer(&(sg_buffer_desc){
-            .usage.storage_buffer = true,
-            .usage.stream_update  = true,
-            .size                 = sizeof(xvg->text_buffer),
-            .label                = "text SBO",
-        });
-        XVG_ASSERT(xvg->text.sbo.id);
-        xvg->text.sbv = sg_make_view(&(sg_view_desc){
-            .storage_buffer = xvg->text.sbo,
-        });
-        XVG_ASSERT(xvg->text.sbv.id);
 
         xvg->text.pip = sg_make_pipeline(&(sg_pipeline_desc){
 #if defined(XVG_TEXT_MULTICHANNEL)
@@ -2319,31 +2364,103 @@ void xvg_deinit(XVG* xvg)
     }
     FT_Done_FreeType(xvg->text.ft_lib);
 
-    linked_arena_destroy(xvg->frame_arena);
+    // linked_arena_destroy(xvg->frame_arena);
     linked_arena_destroy(xvg->arena);
 }
+
+XVGCommandList* xvg_command_list_create(XVG* xvg)
+{
+    XVGCommandList* xcl;
+    xcl = linked_arena_alloc(xvg->arena, sizeof(*xcl));
+
+    LinkedArena* arena = linked_arena_create_ex(0, sizeof(*xcl));
+    xcl->xvg           = xvg;
+    xcl->frame_arena   = arena;
+
+    xcl->shapes.sbo = sg_make_buffer(&(sg_buffer_desc){
+        .usage.storage_buffer = true,
+        .usage.stream_update  = true,
+        .size                 = sizeof(xcl->shapes_buffer),
+        .label                = XVG_LABEL("xvg-shapes"),
+    });
+    xcl->shapes.sbv = sg_make_view(&(sg_view_desc){
+        .storage_buffer = xcl->shapes.sbo,
+    });
+
+    xcl->shapes.line_sbo = sg_make_buffer(&(sg_buffer_desc){
+        .usage.storage_buffer = true,
+        .usage.stream_update  = true,
+        .size                 = sizeof(xcl->line_buffer),
+        .label                = XVG_LABEL("xvg-line-buffer"),
+    });
+    xcl->shapes.line_sbv = sg_make_view(&(sg_view_desc){.storage_buffer = xcl->shapes.line_sbo});
+
+    xcl->text.sbo = sg_make_buffer(&(sg_buffer_desc){
+        .usage.storage_buffer = true,
+        .usage.stream_update  = true,
+        .size                 = sizeof(xcl->text_buffer),
+        .label                = "text SBO",
+    });
+    XVG_ASSERT(xcl->text.sbo.id);
+    xcl->text.sbv = sg_make_view(&(sg_view_desc){
+        .storage_buffer = xcl->text.sbo,
+    });
+    XVG_ASSERT(xcl->text.sbv.id);
+
+    return xcl;
+}
+
+void xvg_command_list_destroy(XVGCommandList* xcl) { linked_arena_destroy(xcl->frame_arena); }
 
 void xvg_begin_frame(XVG* xvg)
 {
     // Oh no, you forgot to call xvg_end_frame()
     // Or perhaps you called a function that caused you to continue processing in your or the OS's event loop
     XVG_ASSERT(xvg->arena_top == NULL);
-    xvg->arena_top = linked_arena_get_top(xvg->arena);
-    linked_arena_clear(xvg->frame_arena);
-
-    xvg->first_command   = NULL;
-    xvg->current_command = NULL;
-    memset(&xvg->draw_start, 0, sizeof(xvg->draw_start));
-
+    xvg->arena_top             = linked_arena_get_top(xvg->arena);
     xvg->text.current_font_idx = 0;
-    xvg->shapes_buffer_len     = 0;
-    xvg->line_buffer_len       = 0;
-    xvg->text_buffer_len       = 0;
 }
 
-void xvg_end_frame(XVG* xvg, int window_width, int window_height)
+void xvg_end_frame(XVG* xvg)
+{
+    linked_arena_release(xvg->arena, xvg->arena_top);
+    xvg->arena_top = NULL;
+
+    for (int i = 0; i < XVG_ARRLEN(xvg->text.atlases); i++)
+    {
+        XVGAtlas* atlas = &xvg->text.atlases[i];
+        if (atlas->dirty)
+        {
+            sg_view_desc desc = sg_query_view_desc(atlas->img_view);
+            sg_update_image(
+                desc.texture.image,
+                &(sg_image_data){
+                    .mip_levels[0] = {
+                        .ptr  = atlas->img_data,
+                        .size = XVG_ATLAS_HEIGHT * XVG_ATLAS_ROW_STRIDE,
+                    }});
+            atlas->dirty = false;
+        }
+    }
+}
+
+void xvg_command_list_begin_frame(XVGCommandList* xcl, XVG* xvg)
+{
+    linked_arena_clear(xcl->frame_arena);
+
+    xcl->first_command   = NULL;
+    xcl->current_command = NULL;
+    memset(&xcl->draw_start, 0, sizeof(xcl->draw_start));
+
+    xcl->shapes_buffer_len = 0;
+    xcl->line_buffer_len   = 0;
+    xcl->text_buffer_len   = 0;
+}
+
+void xvg_command_list_end_frame(XVGCommandList* xvg, int window_width, int window_height)
 {
     xvg_command_batch_draw(xvg, XVG_LABEL("xvg_end_frame"));
+    XVG* x = xvg->xvg;
 
     // Upload data
     if (xvg->shapes_buffer_len)
@@ -2363,22 +2480,6 @@ void xvg_end_frame(XVG* xvg, int window_width, int window_height)
         size_t   num_bytes = sizeof(xvg->text_buffer[0]) * xvg->text_buffer_len;
         sg_range range     = {.ptr = xvg->text_buffer, .size = num_bytes};
         sg_update_buffer(xvg->text.sbo, &range);
-    }
-    for (int i = 0; i < XVG_ARRLEN(xvg->text.atlases); i++)
-    {
-        XVGAtlas* atlas = &xvg->text.atlases[i];
-        if (atlas->dirty)
-        {
-            sg_view_desc desc = sg_query_view_desc(atlas->img_view);
-            sg_update_image(
-                desc.texture.image,
-                &(sg_image_data){
-                    .mip_levels[0] = {
-                                     .ptr  = atlas->img_data,
-                                     .size = XVG_ATLAS_HEIGHT * XVG_ATLAS_ROW_STRIDE,
-                                 }});
-            atlas->dirty = false;
-        }
     }
 
     // Process commands
@@ -2426,13 +2527,17 @@ void xvg_end_frame(XVG* xvg, int window_width, int window_height)
             XVG_ASSERT(num_shapes >= 0);
             if (num_shapes)
             {
-                sg_apply_pipeline(xvg->shapes.pip);
+                sg_apply_pipeline(x->shapes.pip);
 
                 for (int i = 0; i < XVG_ARRLEN(draw->shape_texture); i++)
                 {
                     if (draw->shape_texture[i].id == 0)
-                        draw->shape_texture[i] = xvg->fallback_img_view;
+                        draw->shape_texture[i] = x->fallback_img_view;
                 }
+
+                sg_sampler smp = draw->shape_sampler;
+                if (smp.id == 0)
+                    smp = x->smp_linear;
 
                 sg_apply_bindings(&(sg_bindings){
                     .views[VIEW_vs_xvg_shapes_buffer]      = xvg->shapes.sbv,
@@ -2441,12 +2546,12 @@ void xvg_end_frame(XVG* xvg, int window_width, int window_height)
                     .views[VIEW_fs_xvg_shapes_tex2]        = draw->shape_texture[1],
                     .views[VIEW_fs_xvg_shapes_tex3]        = draw->shape_texture[2],
                     .views[VIEW_fs_xvg_shapes_tex4]        = draw->shape_texture[3],
-                    .samplers[SMP_fs_xvg_shapes_smp]       = draw->shape_sampler,
+                    .samplers[SMP_fs_xvg_shapes_smp]       = smp,
                 });
 
                 vs_xvg_shapes_uniforms_t uniforms = {
-                      .u_size                  = {window_width, window_height},
-                      .u_storage_buffer_offset = draw->shape_buffer_start,
+                    .u_size                  = {window_width, window_height},
+                    .u_storage_buffer_offset = draw->shape_buffer_start,
                 };
 
                 sg_image      img            = sg_query_view_desc(draw->shape_texture[0]).texture.image;
@@ -2478,15 +2583,15 @@ void xvg_end_frame(XVG* xvg, int window_width, int window_height)
             if (num_text)
             {
                 XVG_ASSERT(draw->text_texture.id != 0); // You forgot to set the current texture
-                sg_apply_pipeline(xvg->text.pip);
+                sg_apply_pipeline(x->text.pip);
                 sg_apply_bindings(&(sg_bindings){
                     .views[VIEW_vs_xvg_text_buffer] = xvg->text.sbv,
                     .views[VIEW_fs_xvg_text_tex]    = draw->text_texture,
-                    .samplers[SMP_fs_xvg_text_smp]  = xvg->smp_nearest_neighbour,
+                    .samplers[SMP_fs_xvg_text_smp]  = x->smp_nearest_neighbour,
                 });
 
                 vs_xvg_text_uniforms_t uniforms = {
-                    .u_view_size  = {window_width * xvg->backingScaleFactor, window_height * xvg->backingScaleFactor},
+                    .u_view_size  = {window_width * x->backingScaleFactor, window_height * x->backingScaleFactor},
                     .u_sbo_offset = draw->text_buffer_start,
                 };
                 sg_apply_uniforms(UB_vs_xvg_text_uniforms, &SG_RANGE(uniforms));
@@ -2500,9 +2605,6 @@ void xvg_end_frame(XVG* xvg, int window_width, int window_height)
         cmd = cmd->next;
         ncommands++;
     }
-
-    linked_arena_release(xvg->arena, xvg->arena_top);
-    xvg->arena_top = NULL;
 }
 
 #endif // XVG_IMPL
