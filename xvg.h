@@ -269,6 +269,13 @@ typedef struct XVG
     } text;
 } XVG;
 
+enum
+{
+    XVG_INIT_CAP_SHAPES      = 1024,
+    XVG_INIT_CAP_LINE_BUFFER = 8192,
+    XVG_INIT_CAP_TEXT        = 1024,
+};
+
 typedef struct XVGCommandList
 {
     XVG*         xvg;         // not owned
@@ -288,6 +295,18 @@ typedef struct XVGCommandList
         sg_view text_texture;
     } draw_start;
 
+    unsigned     shapes_buffer_len;
+    unsigned     shapes_buffer_cap;
+    xvg_shape_t* shapes_buffer;
+
+    unsigned            line_buffer_len;
+    unsigned            line_buffer_cap;
+    xvg_line_segment_t* line_buffer;
+
+    unsigned    text_buffer_len;
+    unsigned    text_buffer_cap;
+    xvg_text_t* text_buffer;
+
     struct
     {
         sg_buffer sbo;
@@ -303,29 +322,17 @@ typedef struct XVGCommandList
         sg_view   sbv;
     } text;
 
-#ifndef XVG_SHAPES_CAPACITY
-#define XVG_SHAPES_CAPACITY 1024
-#endif
-    size_t      shapes_buffer_len;
-    xvg_shape_t shapes_buffer[XVG_SHAPES_CAPACITY];
-
-#ifndef XVG_LINE_BUFFER_CAPACITY
-#define XVG_LINE_BUFFER_CAPACITY 8192
-#endif
-    size_t             line_buffer_len;
-    xvg_line_segment_t line_buffer[XVG_LINE_BUFFER_CAPACITY];
-
-#ifndef XVG_MAX_GLYPHS
-#define XVG_MAX_GLYPHS 1024
-#endif
-    size_t     text_buffer_len;
-    xvg_text_t text_buffer[XVG_MAX_GLYPHS];
+    xvg_shape_t (*_debug_shapes_buffer)[XVG_INIT_CAP_SHAPES];
+    xvg_line_segment_t (*_debug_line_buffer)[XVG_INIT_CAP_LINE_BUFFER];
+    xvg_text_t (*_debug_text_buffer)[XVG_INIT_CAP_TEXT];
 } XVGCommandList;
 
 void xvg_init(XVG*);
 void xvg_deinit(XVG*);
 
-XVGCommandList* xvg_command_list_create(XVG*);
+// num_xxx sets the max length of the respective buffers
+// Pass num_xxx = 0 to set defaults
+XVGCommandList* xvg_command_list_create(XVG*, unsigned num_shapes, unsigned num_line_seg, unsigned num_text);
 
 void xvg_begin_frame(XVG*);
 void xvg_end_frame(XVG*);
@@ -957,12 +964,11 @@ xvg_shape_t* _xvg_get_shape(XVGCommandList* xvg)
     // Branchless
     static xvg_shape_t stub;
 
+    XVG_ASSERT(xvg->shapes_buffer_len < xvg->shapes_buffer_cap);
     xvg_shape_t* ret =
-        xvg->shapes_buffer_len < XVG_ARRLEN(xvg->shapes_buffer) ? &xvg->shapes_buffer[xvg->shapes_buffer_len] : &stub;
+        xvg->shapes_buffer_len < xvg->shapes_buffer_cap ? &xvg->shapes_buffer[xvg->shapes_buffer_len] : &stub;
 
     xvg->shapes_buffer_len++;
-    if (xvg->shapes_buffer_len > XVG_ARRLEN(xvg->shapes_buffer))
-        xvg->shapes_buffer_len = XVG_ARRLEN(xvg->shapes_buffer);
     return ret;
 }
 
@@ -1420,7 +1426,7 @@ void xvg_draw_line_plot(
     float           stroke_width,
     uint32_t        colour)
 {
-    size_t    remaining_capacity = XVG_ARRLEN(xvg->line_buffer) - xvg->line_buffer_len;
+    size_t    remaining_capacity = xvg->line_buffer_cap - xvg->line_buffer_len;
     const int backingScaleFactor = xvg->xvg->backingScaleFactor;
 
     int N = width * backingScaleFactor;
@@ -1477,7 +1483,7 @@ void xvg_draw_line_plot(
     };
 
     xvg->line_buffer_len = end_idx;
-    XVG_ASSERT(xvg->line_buffer_len <= XVG_ARRLEN(xvg->line_buffer));
+    XVG_ASSERT(xvg->line_buffer_len <= xvg->line_buffer_cap);
 }
 
 XVGFontSlot* _xvg_get_current_font_slot(XVG* xvg) { return &xvg->text.fonts[xvg->text.current_font_idx]; }
@@ -1758,12 +1764,10 @@ xvg_text_t* _xvg_get_text(XVGCommandList* xvg)
 {
     static xvg_text_t stub;
 
-    xvg_text_t* ret =
-        xvg->text_buffer_len < XVG_ARRLEN(xvg->text_buffer) ? &xvg->text_buffer[xvg->text_buffer_len] : &stub;
+    xvg_text_t* ret = xvg->text_buffer_len < xvg->text_buffer_cap ? &xvg->text_buffer[xvg->text_buffer_len] : &stub;
 
     xvg->text_buffer_len++;
-    if (xvg->text_buffer_len > XVG_ARRLEN(xvg->text_buffer))
-        xvg->text_buffer_len = XVG_ARRLEN(xvg->text_buffer);
+
     return ret;
 }
 
@@ -1784,8 +1788,6 @@ bool _xvg_push_glyph(XVGCommandList* xvg, int pen_x, int pen_y, const XVGAtlasRe
         obj->topleft      = _xvg_pack_xy_coord(pen_x + (int)rect->bearing_x, pen_y - (int)rect->bearing_y);
         obj->atlas_coords = (xvecu){.r = rect->x, .g = rect->y, .b = rect->w, .a = rect->h}.u32;
         obj->colour       = colour;
-
-        xvg->text_buffer_len++;
 
         XVG_ASSERT(xvg->draw_start.text_texture.id != 0);
     }
@@ -2186,7 +2188,6 @@ void xvg_draw_text_layout(
                 remaining_glyphs[remaining_glyphs_len++] = *gpos;
             }
         }
-        size_t text_buf_end_len = xvg->text_buffer_len;
 
         XVG_ASSERT(glyphs_consumed <= glyph_pos_len);
         if (glyphs_consumed < glyph_pos_len)
@@ -2360,19 +2361,40 @@ void xvg_deinit(XVG* xvg)
     linked_arena_destroy(xvg->arena);
 }
 
-XVGCommandList* xvg_command_list_create(XVG* xvg)
+XVGCommandList* xvg_command_list_create(XVG* xvg, unsigned num_shapes, unsigned num_line_seg, unsigned num_text)
 {
-    XVGCommandList* xcl;
-    xcl = linked_arena_alloc(xvg->arena, sizeof(*xcl));
+    if (num_shapes == 0)
+        num_shapes = XVG_INIT_CAP_SHAPES;
+    if (num_line_seg == 0)
+        num_line_seg = XVG_INIT_CAP_LINE_BUFFER;
+    if (num_text == 0)
+        num_text = XVG_INIT_CAP_TEXT;
+
+    XVG_ASSERT(xvg->arena_top == NULL); // dont create these within a frame! Create them at startup
+    // TODO: support creating these within a frame and not just at startup
+
+    XVGCommandList* xcl = linked_arena_alloc_clear(xvg->arena, sizeof(*xcl));
 
     xcl->xvg         = xvg;
     xcl->arena       = xvg->arena;
     xcl->frame_arena = xvg->frame_arena;
 
+    xcl->shapes_buffer_cap = num_shapes;
+    xcl->line_buffer_cap   = num_line_seg;
+    xcl->text_buffer_cap   = num_text;
+
+    size_t sz_shapes = num_shapes * sizeof(xcl->shapes_buffer[0]);
+    size_t sz_lines  = num_line_seg * sizeof(xcl->line_buffer[0]);
+    size_t sz_text   = num_text * sizeof(xcl->text_buffer[0]);
+
+    xcl->shapes_buffer = linked_arena_alloc(xvg->arena, sz_shapes);
+    xcl->line_buffer   = linked_arena_alloc(xvg->arena, sz_lines);
+    xcl->text_buffer   = linked_arena_alloc(xvg->arena, sz_text);
+
     xcl->shapes.sbo = sg_make_buffer(&(sg_buffer_desc){
         .usage.storage_buffer = true,
         .usage.stream_update  = true,
-        .size                 = sizeof(xcl->shapes_buffer),
+        .size                 = sz_shapes,
         .label                = XVG_LABEL("xvg-shapes"),
     });
     xcl->shapes.sbv = sg_make_view(&(sg_view_desc){
@@ -2382,7 +2404,7 @@ XVGCommandList* xvg_command_list_create(XVG* xvg)
     xcl->shapes.line_sbo = sg_make_buffer(&(sg_buffer_desc){
         .usage.storage_buffer = true,
         .usage.stream_update  = true,
-        .size                 = sizeof(xcl->line_buffer),
+        .size                 = sz_lines,
         .label                = XVG_LABEL("xvg-line-buffer"),
     });
     xcl->shapes.line_sbv = sg_make_view(&(sg_view_desc){.storage_buffer = xcl->shapes.line_sbo});
@@ -2390,7 +2412,7 @@ XVGCommandList* xvg_command_list_create(XVG* xvg)
     xcl->text.sbo = sg_make_buffer(&(sg_buffer_desc){
         .usage.storage_buffer = true,
         .usage.stream_update  = true,
-        .size                 = sizeof(xcl->text_buffer),
+        .size                 = sz_text,
         .label                = "text SBO",
     });
     XVG_ASSERT(xcl->text.sbo.id);
@@ -2454,6 +2476,8 @@ void xvg_command_list_end_frame(XVGCommandList* xvg, int window_width, int windo
     // Upload data
     if (xvg->shapes_buffer_len)
     {
+        if (xvg->shapes_buffer_len > xvg->shapes_buffer_cap)
+            xvg->shapes_buffer_len = xvg->shapes_buffer_cap;
         size_t   num_bytes = sizeof(xvg->shapes_buffer[0]) * xvg->shapes_buffer_len;
         sg_range range     = {.ptr = xvg->shapes_buffer, .size = num_bytes};
         sg_update_buffer(xvg->shapes.sbo, &range);
@@ -2466,6 +2490,9 @@ void xvg_command_list_end_frame(XVGCommandList* xvg, int window_width, int windo
     }
     if (xvg->text_buffer_len)
     {
+        if (xvg->text_buffer_len > xvg->text_buffer_cap)
+            xvg->text_buffer_len = xvg->text_buffer_cap;
+
         size_t   num_bytes = sizeof(xvg->text_buffer[0]) * xvg->text_buffer_len;
         sg_range range     = {.ptr = xvg->text_buffer, .size = num_bytes};
         sg_update_buffer(xvg->text.sbo, &range);
