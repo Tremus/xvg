@@ -1197,6 +1197,9 @@ void xvg_draw_arc_with_gradient(
     bool            butt,
     XVGGradient     grad)
 {
+    if (start_turn == end_turn)
+        return;
+
     unsigned tex_idx = _xvg_set_bound_texture(xcl, &grad);
 
     XVGShapeType shape_type = butt ? XVG_SHAPE_ARC_BUTT_STROKE : XVG_SHAPE_ARC_ROUND_STROKE;
@@ -1720,6 +1723,10 @@ const XVGTextLayout* xvg_create_text_layout(
     float           _line_height)
 {
     static const XVGTextLayout stub = {0};
+    XVGFontSlot*               sl   = _xvg_get_current_font_slot(xcl->xvg);
+    XVG_ASSERT(sl->ft_face);
+    if (!sl->ft_face)
+        return &stub;
 
     XVG_ASSERT(font_size < 128);
     if (text_end == NULL)
@@ -1740,10 +1747,6 @@ const XVGTextLayout* xvg_create_text_layout(
     XVGGlyphLayout*   glyphs = linked_arena_alloc(xcl->arena, sizeof(*glyphs) * layout->cap_glyphs);
     xvg_layout_set_rows(layout, rows);
     xvg_layout_set_glyphs(layout, glyphs);
-
-    XVGFontSlot* sl = _xvg_get_current_font_slot(xcl->xvg);
-    if (!sl->ft_face)
-        return &stub;
 
     FT_FaceRec* face = sl->ft_face;
     FT_Set_Pixel_Sizes(face, 0, font_size);
@@ -1961,6 +1964,9 @@ void xvg_draw_text_layout(
     int                  alignment,
     uint32_t             colour)
 {
+    if (layout->num_glyphs == 0)
+        return;
+
     x *= xcl->xvg->backingScaleFactor;
     y *= xcl->xvg->backingScaleFactor;
 
