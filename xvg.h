@@ -2,7 +2,6 @@
 #define XVG_H
 
 #include "sokol_gfx.h"
-#include "xvg_shaders.glsl.h"
 #include <linked_arena.h>
 #include <stb_rect_pack.h>
 
@@ -287,17 +286,17 @@ typedef struct XVGCommandList
         sg_view text_texture;
     } draw_start;
 
-    unsigned     shapes_buffer_len;
-    unsigned     shapes_buffer_cap;
-    xvg_shape_t* shapes_buffer;
+    unsigned            shapes_buffer_len;
+    unsigned            shapes_buffer_cap;
+    struct xvg_shape_t* shapes_buffer;
 
-    unsigned            line_buffer_len;
-    unsigned            line_buffer_cap;
-    xvg_line_segment_t* line_buffer;
+    unsigned                   line_buffer_len;
+    unsigned                   line_buffer_cap;
+    struct xvg_line_segment_t* line_buffer;
 
-    unsigned    text_buffer_len;
-    unsigned    text_buffer_cap;
-    xvg_text_t* text_buffer;
+    unsigned           text_buffer_len;
+    unsigned           text_buffer_cap;
+    struct xvg_text_t* text_buffer;
 
     sg_buffer shapes_sbo;
     sg_view   shapes_sbv;
@@ -307,10 +306,6 @@ typedef struct XVGCommandList
 
     sg_buffer text_sbo;
     sg_view   text_sbv;
-
-    xvg_shape_t (*_debug_shapes_buffer)[XVG_INIT_CAP_SHAPES];
-    xvg_line_segment_t (*_debug_line_buffer)[XVG_INIT_CAP_LINE_BUFFER];
-    xvg_text_t (*_debug_text_buffer)[XVG_INIT_CAP_TEXT];
 } XVGCommandList;
 
 void xvg_init(XVG*);
@@ -624,6 +619,7 @@ void xvg_command_custom(XVGCommandList*, void* uptr, XVGCustomFunc func, const c
 
 #ifdef XVG_IMPL
 #undef XVG_IMPL
+
 #include <string.h>
 #include <utf8.h>
 #include <xhl/array.h>
@@ -635,6 +631,8 @@ void xvg_command_custom(XVGCommandList*, void* uptr, XVGCustomFunc func, const c
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include FT_ADVANCES_H
+
+#include "xvg_shaders.glsl.h"
 
 #if !defined(XVG_MALLOC) || !defined(XVG_REALLOC) || !defined(XVG_FREE)
 #include <stdlib.h>

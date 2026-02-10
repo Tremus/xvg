@@ -201,7 +201,6 @@ void main() {
         // buffer_idx       = is_right ? range.y : range.x;
         buffer_idx_range = vert.buffer_idx_range;
         px_inc       = 2.0 / u_size.y;
-        stroke_width = stroke_width_px / vh;
     }
 
     if (grad_type == XVG_COLOUR_LINEAR_GRADIENT)
@@ -506,10 +505,9 @@ void main()
         float d  = min(d1, d2);
 
         float f = feather;
-        float shape_vertical   = smoothstep(stroke_width*0.5, 0, abs(d)+f*0.01);
-        float shape_horizontal = smoothstep(f, 0, abs(line_y - p.y) - stroke_width + f*0.5);
 
-        shape = max(shape_vertical, shape_horizontal);
+        shape = smoothstep(f*0.5, 0, d-stroke_width*0.5 + f*0.5);
+        shape = clamp(shape, 0, 1);
 
         // Crop with rounded rectange
         vec2  crop_b = p_scale;
