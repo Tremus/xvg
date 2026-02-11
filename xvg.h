@@ -2,6 +2,7 @@
 #define XVG_H
 
 #include "sokol_gfx.h"
+#include "xvg_shaders.glsl.h"
 #include <linked_arena.h>
 #include <stb_rect_pack.h>
 
@@ -260,13 +261,6 @@ typedef struct XVG
     sg_pipeline pip_text;
 } XVG;
 
-enum
-{
-    XVG_INIT_CAP_SHAPES      = 1024,
-    XVG_INIT_CAP_LINE_BUFFER = 8192,
-    XVG_INIT_CAP_TEXT        = 1024,
-};
-
 typedef struct XVGCommandList
 {
     XVG*         xvg;         // not owned
@@ -286,16 +280,13 @@ typedef struct XVGCommandList
         sg_view text_texture;
     } draw_start;
 
-    unsigned            shapes_buffer_len;
-    unsigned            shapes_buffer_cap;
+    size_t              shapes_buffer_len;
     struct xvg_shape_t* shapes_buffer;
 
-    unsigned                   line_buffer_len;
-    unsigned                   line_buffer_cap;
+    size_t                     line_buffer_len;
     struct xvg_line_segment_t* line_buffer;
 
-    unsigned           text_buffer_len;
-    unsigned           text_buffer_cap;
+    size_t             text_buffer_len;
     struct xvg_text_t* text_buffer;
 
     sg_buffer shapes_sbo;
@@ -306,6 +297,20 @@ typedef struct XVGCommandList
 
     sg_buffer text_sbo;
     sg_view   text_sbv;
+
+#ifndef XVG_SHAPES_CAPACITY
+#define XVG_SHAPES_CAPACITY 1024
+#endif
+#ifndef XVG_LINE_BUFFER_CAPACITY
+#define XVG_LINE_BUFFER_CAPACITY 8192
+#endif
+#ifndef XVG_TEXT_CAPACITY
+#define XVG_TEXT_CAPACITY 1024
+#endif
+
+    xvg_shape_t        _shapes_buffer[XVG_SHAPES_CAPACITY];
+    xvg_line_segment_t _line_buffer[XVG_LINE_BUFFER_CAPACITY];
+    xvg_text_t         _text_buffer[XVG_TEXT_CAPACITY];
 } XVGCommandList;
 
 void xvg_init(XVG*);
@@ -313,7 +318,7 @@ void xvg_deinit(XVG*);
 
 // num_xxx sets the max length of the respective buffers
 // Pass num_xxx = 0 to set defaults
-XVGCommandList* xvg_command_list_create(XVG*, unsigned num_shapes, unsigned num_line_seg, unsigned num_text);
+XVGCommandList* xvg_command_list_create(XVG*);
 
 void xvg_begin_frame(XVG*);
 void xvg_end_frame(XVG*);
@@ -586,6 +591,8 @@ typedef enum XVGCommandType
     XVG_CMD_CUSTOM,
 } XVGCommandType;
 
+// TODO: Make this a big fat union and store everything in a fixed size array
+//       Replace the sg_pass field in XVGCommandBeginPass with an index into a fixed size array of sg_pass
 typedef struct XVGCommand
 {
     XVGCommandType type;
@@ -631,8 +638,6 @@ void xvg_command_custom(XVGCommandList*, void* uptr, XVGCustomFunc func, const c
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include FT_ADVANCES_H
-
-#include "xvg_shaders.glsl.h"
 
 #if !defined(XVG_MALLOC) || !defined(XVG_REALLOC) || !defined(XVG_FREE)
 #include <stdlib.h>
@@ -837,9 +842,9 @@ xvg_shape_t* _xvg_get_shape(XVGCommandList* xcl)
     // Branchless
     static xvg_shape_t stub;
 
-    XVG_ASSERT(xcl->shapes_buffer_len < xcl->shapes_buffer_cap);
+    XVG_ASSERT(xcl->shapes_buffer_len < XVG_ARRLEN(xcl->_shapes_buffer));
     xvg_shape_t* ret =
-        xcl->shapes_buffer_len < xcl->shapes_buffer_cap ? &xcl->shapes_buffer[xcl->shapes_buffer_len] : &stub;
+        xcl->shapes_buffer_len < XVG_ARRLEN(xcl->_shapes_buffer) ? &xcl->shapes_buffer[xcl->shapes_buffer_len] : &stub;
 
     xcl->shapes_buffer_len++;
     return ret;
@@ -1302,7 +1307,7 @@ void xvg_draw_line_plot(
     float           stroke_width,
     uint32_t        colour)
 {
-    size_t    remaining_capacity = xcl->line_buffer_cap - xcl->line_buffer_len;
+    size_t    remaining_capacity = XVG_ARRLEN(xcl->_line_buffer) - xcl->line_buffer_len;
     const int backingScaleFactor = xcl->xvg->backingScaleFactor;
 
     int N = width * backingScaleFactor;
@@ -1359,7 +1364,7 @@ void xvg_draw_line_plot(
     };
 
     xcl->line_buffer_len = end_idx;
-    XVG_ASSERT(xcl->line_buffer_len <= xcl->line_buffer_cap);
+    XVG_ASSERT(xcl->line_buffer_len <= XVG_ARRLEN(xcl->_line_buffer));
 }
 
 XVGFontSlot* _xvg_get_current_font_slot(XVG* xcl) { return &xcl->fonts[xcl->current_font_idx]; }
@@ -1640,7 +1645,8 @@ xvg_text_t* _xvg_get_text(XVGCommandList* xcl)
 {
     static xvg_text_t stub;
 
-    xvg_text_t* ret = xcl->text_buffer_len < xcl->text_buffer_cap ? &xcl->text_buffer[xcl->text_buffer_len] : &stub;
+    xvg_text_t* ret =
+        xcl->text_buffer_len < XVG_ARRLEN(xcl->_text_buffer) ? &xcl->text_buffer[xcl->text_buffer_len] : &stub;
 
     xcl->text_buffer_len++;
 
@@ -2236,15 +2242,8 @@ void xvg_deinit(XVG* xcl)
     linked_arena_destroy(xcl->arena);
 }
 
-XVGCommandList* xvg_command_list_create(XVG* xvg, unsigned num_shapes, unsigned num_line_seg, unsigned num_text)
+XVGCommandList* xvg_command_list_create(XVG* xvg)
 {
-    if (num_shapes == 0)
-        num_shapes = XVG_INIT_CAP_SHAPES;
-    if (num_line_seg == 0)
-        num_line_seg = XVG_INIT_CAP_LINE_BUFFER;
-    if (num_text == 0)
-        num_text = XVG_INIT_CAP_TEXT;
-
     XVG_ASSERT(xvg->arena_top == NULL); // dont create these within a frame! Create them at startup
     // TODO: support creating these within a frame and not just at startup
 
@@ -2254,22 +2253,14 @@ XVGCommandList* xvg_command_list_create(XVG* xvg, unsigned num_shapes, unsigned 
     xcl->arena       = xvg->arena;
     xcl->frame_arena = xvg->frame_arena;
 
-    xcl->shapes_buffer_cap = num_shapes;
-    xcl->line_buffer_cap   = num_line_seg;
-    xcl->text_buffer_cap   = num_text;
-
-    size_t sz_shapes = num_shapes * sizeof(xcl->shapes_buffer[0]);
-    size_t sz_lines  = num_line_seg * sizeof(xcl->line_buffer[0]);
-    size_t sz_text   = num_text * sizeof(xcl->text_buffer[0]);
-
-    xcl->shapes_buffer = linked_arena_alloc(xcl->arena, sz_shapes);
-    xcl->line_buffer   = linked_arena_alloc(xcl->arena, sz_lines);
-    xcl->text_buffer   = linked_arena_alloc(xcl->arena, sz_text);
+    xcl->shapes_buffer = xcl->_shapes_buffer;
+    xcl->text_buffer   = xcl->_text_buffer;
+    xcl->line_buffer   = xcl->_line_buffer;
 
     xcl->shapes_sbo = sg_make_buffer(&(sg_buffer_desc){
         .usage.storage_buffer = true,
         .usage.stream_update  = true,
-        .size                 = sz_shapes,
+        .size                 = sizeof(xcl->_shapes_buffer),
         .label                = XVG_LABEL("xcl-shapes"),
     });
     xcl->shapes_sbv = sg_make_view(&(sg_view_desc){
@@ -2279,7 +2270,7 @@ XVGCommandList* xvg_command_list_create(XVG* xvg, unsigned num_shapes, unsigned 
     xcl->lines_sbo = sg_make_buffer(&(sg_buffer_desc){
         .usage.storage_buffer = true,
         .usage.stream_update  = true,
-        .size                 = sz_lines,
+        .size                 = sizeof(xcl->_line_buffer),
         .label                = XVG_LABEL("xcl-line-buffer"),
     });
     xcl->lines_sbv = sg_make_view(&(sg_view_desc){.storage_buffer = xcl->lines_sbo});
@@ -2287,7 +2278,7 @@ XVGCommandList* xvg_command_list_create(XVG* xvg, unsigned num_shapes, unsigned 
     xcl->text_sbo = sg_make_buffer(&(sg_buffer_desc){
         .usage.storage_buffer = true,
         .usage.stream_update  = true,
-        .size                 = sz_text,
+        .size                 = sizeof(xcl->_text_buffer),
         .label                = "text SBO",
     });
     XVG_ASSERT(xcl->text_sbo.id);
@@ -2351,22 +2342,24 @@ void xvg_command_list_end_frame(XVGCommandList* xcl, int window_width, int windo
     // Upload data
     if (xcl->shapes_buffer_len)
     {
-        if (xcl->shapes_buffer_len > xcl->shapes_buffer_cap)
-            xcl->shapes_buffer_len = xcl->shapes_buffer_cap;
+        if (xcl->shapes_buffer_len > XVG_ARRLEN(xcl->_shapes_buffer))
+            xcl->shapes_buffer_len = XVG_ARRLEN(xcl->_shapes_buffer);
         size_t   num_bytes = sizeof(xcl->shapes_buffer[0]) * xcl->shapes_buffer_len;
         sg_range range     = {.ptr = xcl->shapes_buffer, .size = num_bytes};
         sg_update_buffer(xcl->shapes_sbo, &range);
     }
     if (xcl->line_buffer_len)
     {
+        if (xcl->line_buffer_len > XVG_ARRLEN(xcl->_line_buffer))
+            xcl->line_buffer_len = XVG_ARRLEN(xcl->_line_buffer);
         size_t   num_bytes = sizeof(xcl->line_buffer[0]) * xcl->line_buffer_len;
         sg_range range     = {.ptr = xcl->line_buffer, .size = num_bytes};
         sg_update_buffer(xcl->lines_sbo, &range);
     }
     if (xcl->text_buffer_len)
     {
-        if (xcl->text_buffer_len > xcl->text_buffer_cap)
-            xcl->text_buffer_len = xcl->text_buffer_cap;
+        if (xcl->text_buffer_len > XVG_ARRLEN(xcl->_text_buffer))
+            xcl->text_buffer_len = XVG_ARRLEN(xcl->_text_buffer);
 
         size_t   num_bytes = sizeof(xcl->text_buffer[0]) * xcl->text_buffer_len;
         sg_range range     = {.ptr = xcl->text_buffer, .size = num_bytes};
