@@ -261,33 +261,74 @@ typedef struct XVG
     sg_pipeline pip_text;
 } XVG;
 
+// Commands
+typedef struct XVGCommandBeginPass
+{
+    int pass_idx;
+} XVGCommandBeginPass;
+
+typedef struct XVGCommandSetScissor
+{
+    int x, y, w, h;
+} XVGCommandSetScissor;
+typedef struct XVGCommandSetScissor XVGCommandSetViewport;
+
+typedef struct XVGCommandDraw
+{
+    int        shape_buffer_start;
+    int        shape_buffer_end;
+    sg_view    shape_texture[4];
+    sg_sampler shape_sampler;
+
+    int     text_buffer_start;
+    int     text_buffer_end;
+    sg_view text_texture;
+} XVGCommandDraw;
+
+typedef void (*XVGCustomFunc)(void* uptr);
+
+typedef struct XVGCommandCustom
+{
+    void*         uptr;
+    XVGCustomFunc func;
+} XVGCommandCustom;
+
+typedef enum XVGCommandType
+{
+    XVG_CMD_NONE,
+    XVG_CMD_BEGIN_PASS,
+    XVG_CMD_END_PASS,
+    XVG_CMD_SET_SCISSOR,
+    XVG_CMD_SET_VIEWPORT,
+    XVG_CMD_DRAW,
+    XVG_CMD_CUSTOM,
+} XVGCommandType;
+
+// TODO: Make this a big fat union and store everything in a fixed size array
+//       Replace the sg_pass field in XVGCommandBeginPass with an index into a fixed size array of sg_pass
+typedef struct XVGCommand
+{
+    XVGCommandType type;
+    const char*    label;
+
+    union
+    {
+        void* data;
+
+        XVGCommandBeginPass   beginPass;
+        XVGCommandDraw        draw;
+        XVGCommandSetScissor  scissor;
+        XVGCommandSetViewport viewport;
+        XVGCommandCustom      custom;
+    };
+
+    int next_idx;
+} XVGCommand;
+
 typedef struct XVGCommandList
 {
-    XVG*         xvg;         // not owned
-    LinkedArena* arena;       // not owned
-    LinkedArena* frame_arena; // not owned
-
-    struct XVGCommand* first_command;
-    struct XVGCommand* current_command;
-
-    struct
-    {
-        int        shape_buffer_start;
-        sg_view    shape_texture[4];
-        sg_sampler shape_sampler;
-
-        int     text_buffer_start;
-        sg_view text_texture;
-    } draw_start;
-
-    size_t              shapes_buffer_len;
-    struct xvg_shape_t* shapes_buffer;
-
-    size_t                     line_buffer_len;
-    struct xvg_line_segment_t* line_buffer;
-
-    size_t             text_buffer_len;
-    struct xvg_text_t* text_buffer;
+    XVG*         xvg;   // not owned
+    LinkedArena* arena; // not owned
 
     sg_buffer shapes_sbo;
     sg_view   shapes_sbv;
@@ -298,19 +339,42 @@ typedef struct XVGCommandList
     sg_buffer text_sbo;
     sg_view   text_sbv;
 
+    struct
+    {
+        int first_command_idx;
+        int last_command_idx;
+
+        XVGCommandDraw draw;
+
+        unsigned num_commands;
+        unsigned num_passes;
+        unsigned num_shapes;
+        unsigned num_line_segments;
+        unsigned num_text;
+    } frame;
+
+#ifndef XVG_COMMANDS_CAPACITY
+#define XVG_COMMANDS_CAPACITY 128
+#endif
+#ifndef XVG_PASS_CAPACITY
+#define XVG_PASS_CAPACITY 16
+#endif
 #ifndef XVG_SHAPES_CAPACITY
 #define XVG_SHAPES_CAPACITY 1024
 #endif
-#ifndef XVG_LINE_BUFFER_CAPACITY
-#define XVG_LINE_BUFFER_CAPACITY 8192
+#ifndef XVG_LINE_SEGMENTS_CAPACITY
+#define XVG_LINE_SEGMENTS_CAPACITY 8192
 #endif
 #ifndef XVG_TEXT_CAPACITY
 #define XVG_TEXT_CAPACITY 1024
 #endif
 
-    xvg_shape_t        _shapes_buffer[XVG_SHAPES_CAPACITY];
-    xvg_line_segment_t _line_buffer[XVG_LINE_BUFFER_CAPACITY];
-    xvg_text_t         _text_buffer[XVG_TEXT_CAPACITY];
+    XVGCommand commands[XVG_COMMANDS_CAPACITY];
+    sg_pass    passes[XVG_PASS_CAPACITY];
+
+    xvg_shape_t        shapes[XVG_SHAPES_CAPACITY];
+    xvg_line_segment_t line_segments[XVG_LINE_SEGMENTS_CAPACITY];
+    xvg_text_t         text[XVG_TEXT_CAPACITY];
 } XVGCommandList;
 
 void xvg_init(XVG*);
@@ -320,6 +384,13 @@ void xvg_deinit(XVG*);
 // Pass num_xxx = 0 to set defaults
 XVGCommandList* xvg_command_list_create(XVG*);
 
+void xvg_command_begin_pass(XVGCommandList*, const sg_pass*, const char* label);
+void xvg_command_end_pass(XVGCommandList*, const char* label);
+void xvg_command_set_scissor(XVGCommandList*, int x, int y, int w, int h, const char* label);
+void xvg_command_set_viewport(XVGCommandList*, int x, int y, int w, int h, const char* label);
+void xvg_command_batch_draw(XVGCommandList*, const char* label);
+void xvg_command_custom(XVGCommandList*, void* uptr, XVGCustomFunc func, const char* label);
+
 void xvg_begin_frame(XVG*);
 void xvg_end_frame(XVG*);
 void xvg_command_list_begin_frame(XVGCommandList* xcl);
@@ -328,7 +399,7 @@ void xvg_command_list_end_frame(XVGCommandList* xcl, int window_width, int windo
 // Shapes
 // Unlike canvas style APIs, there are no 'fill' and 'stroke' commands. If 'stroke_width' is 0 the shape is implicitly
 // filled. Values are in pixels. Stroking is done on the INSIDE of the shape, so you always get accurate widths
-// Strokes have a maximum width of 15 with 2 exceptions: line plots (2px max), arcs & rounded lines (31px max)
+// Strokes have a maximum width of 15 with 2 exceptions: line plots (2px max), arcs & rounded line_segments (31px max)
 // 'radius' is in pixels
 // 'angle' and 'rotate' are in the less convential but greatly superior 'turns'.
 // 0 turns == 0 degrees/0pi. 1 turn == 360 degrees/2pi, 0.25 turn = halfpi/90deg etc.
@@ -549,75 +620,6 @@ static void xvg_release_text_layout(XVGCommandList* xcl, const XVGTextLayout* la
 };
 void xvg_draw_text_layout(XVGCommandList* xcl, const XVGTextLayout* layout, int x, int y, int align, uint32_t col);
 
-// Commands
-typedef struct XVGCommandBeginPass
-{
-    sg_pass pass;
-} XVGCommandBeginPass;
-
-typedef struct XVGCommandSetScissor
-{
-    int x, y, w, h;
-} XVGCommandSetScissor;
-typedef struct XVGCommandSetScissor XVGCommandSetViewport;
-
-typedef struct XVGCommandDraw
-{
-    int        shape_buffer_start;
-    int        shape_buffer_end;
-    sg_view    shape_texture[4];
-    sg_sampler shape_sampler;
-
-    int     text_buffer_start;
-    int     text_buffer_end;
-    sg_view text_texture;
-} XVGCommandDraw;
-
-typedef void (*XVGCustomFunc)(void* uptr);
-
-typedef struct XVGCommandCustom
-{
-    void*         uptr;
-    XVGCustomFunc func;
-} XVGCommandCustom;
-
-typedef enum XVGCommandType
-{
-    XVG_CMD_BEGIN_PASS,
-    XVG_CMD_END_PASS,
-    XVG_CMD_SET_SCISSOR,
-    XVG_CMD_SET_VIEWPORT,
-    XVG_CMD_DRAW,
-    XVG_CMD_CUSTOM,
-} XVGCommandType;
-
-// TODO: Make this a big fat union and store everything in a fixed size array
-//       Replace the sg_pass field in XVGCommandBeginPass with an index into a fixed size array of sg_pass
-typedef struct XVGCommand
-{
-    XVGCommandType type;
-    const char*    label;
-    union
-    {
-        void* data;
-
-        XVGCommandBeginPass*   beginPass;
-        XVGCommandDraw*        draw;
-        XVGCommandSetScissor*  scissor;
-        XVGCommandSetViewport* viewport;
-        XVGCommandCustom*      custom;
-    } payload;
-
-    struct XVGCommand* next;
-} XVGCommand;
-
-void xvg_command_begin_pass(XVGCommandList*, const sg_pass*, const char* label);
-void xvg_command_end_pass(XVGCommandList*, const char* label);
-void xvg_command_set_scissor(XVGCommandList*, int x, int y, int w, int h, const char* label);
-void xvg_command_set_viewport(XVGCommandList*, int x, int y, int w, int h, const char* label);
-void xvg_command_batch_draw(XVGCommandList*, const char* label);
-void xvg_command_custom(XVGCommandList*, void* uptr, XVGCustomFunc func, const char* label);
-
 // #ifdef __cplusplus
 // }
 // #endif
@@ -719,50 +721,53 @@ uint32_t _xvg_pack_xy_coord(int x, int y)
     return v.u32;
 }
 
-XVGCommand* _xvg_alloc_command(XVGCommandList* xcl, XVGCommandType type, const char* label)
+XVGCommand* _xvg_get_command(XVGCommandList* xcl, XVGCommandType type, const char* label)
 {
-    XVGCommand* cmd = linked_arena_alloc_clear(xcl->frame_arena, sizeof(*cmd));
+    int         idx = ++xcl->frame.num_commands < XVG_ARRLEN(xcl->commands) ? xcl->frame.num_commands : 0;
+    XVGCommand* cmd = xcl->commands + idx;
+    memset(cmd, 0, sizeof(*cmd));
 
     cmd->type  = type;
     cmd->label = label;
 
-    if (xcl->first_command == NULL)
-        xcl->first_command = cmd;
+    if (xcl->frame.first_command_idx == 0)
+        xcl->frame.first_command_idx = idx;
 
-    if (xcl->current_command)
+    if (xcl->frame.last_command_idx)
     {
-        XVG_ASSERT(xcl->current_command->next == NULL);
-        xcl->current_command->next = cmd;
+        XVG_ASSERT(xcl->commands[xcl->frame.last_command_idx].next_idx == 0);
+        xcl->commands[xcl->frame.last_command_idx].next_idx = idx;
     }
 
-    xcl->current_command = cmd;
+    xcl->frame.last_command_idx = idx;
 
     return cmd;
 }
 
 void xvg_command_begin_pass(XVGCommandList* xcl, const sg_pass* pass, const char* label)
 {
-    XVGCommand*          cmd = _xvg_alloc_command(xcl, XVG_CMD_BEGIN_PASS, label);
-    XVGCommandBeginPass* bp  = linked_arena_alloc_clear(xcl->frame_arena, sizeof(*bp));
-    cmd->payload.beginPass   = bp;
-
-    bp->pass = *pass;
+    XVGCommand* cmd = _xvg_get_command(xcl, XVG_CMD_BEGIN_PASS, label);
+    int         idx = ++xcl->frame.num_passes < XVG_ARRLEN(xcl->passes) ? xcl->frame.num_passes : 0;
+    if (idx != 0)
+    {
+        xcl->passes[idx] = *pass;
+    }
+    cmd->beginPass.pass_idx = idx;
 }
 
 void xvg_command_end_pass(XVGCommandList* xcl, const char* label)
 {
     xvg_command_batch_draw(xcl, XVG_LABEL("xvg_command_end_pass()"));
 
-    _xvg_alloc_command(xcl, XVG_CMD_END_PASS, label);
+    _xvg_get_command(xcl, XVG_CMD_END_PASS, label);
 }
 
 void xvg_command_set_scissor(XVGCommandList* xcl, int x, int y, int w, int h, const char* label)
 {
     xvg_command_batch_draw(xcl, XVG_LABEL("xvg_command_set_scissor()"));
 
-    XVGCommand*           cmd = _xvg_alloc_command(xcl, XVG_CMD_SET_SCISSOR, label);
-    XVGCommandSetScissor* ss  = linked_arena_alloc_clear(xcl->frame_arena, sizeof(*ss));
-    cmd->payload.scissor      = ss;
+    XVGCommand*           cmd = _xvg_get_command(xcl, XVG_CMD_SET_SCISSOR, label);
+    XVGCommandSetScissor* ss  = &cmd->scissor;
 
     ss->x = x;
     ss->y = y;
@@ -774,9 +779,8 @@ void xvg_command_set_viewport(XVGCommandList* xcl, int x, int y, int w, int h, c
 {
     xvg_command_batch_draw(xcl, XVG_LABEL("xvg_command_set_viewport()"));
 
-    XVGCommand*            cmd = _xvg_alloc_command(xcl, XVG_CMD_SET_VIEWPORT, label);
-    XVGCommandSetViewport* sv  = linked_arena_alloc_clear(xcl->frame_arena, sizeof(*sv));
-    cmd->payload.viewport      = sv;
+    XVGCommand*            cmd = _xvg_get_command(xcl, XVG_CMD_SET_VIEWPORT, label);
+    XVGCommandSetViewport* sv  = &cmd->viewport;
 
     sv->x = x;
     sv->y = y;
@@ -786,45 +790,31 @@ void xvg_command_set_viewport(XVGCommandList* xcl, int x, int y, int w, int h, c
 
 void xvg_command_batch_draw(XVGCommandList* xcl, const char* label)
 {
-    if (xcl->draw_start.shape_buffer_start == xcl->shapes_buffer_len &&
-        xcl->draw_start.text_buffer_start == xcl->text_buffer_len)
+    if (xcl->frame.draw.shape_buffer_start == xcl->frame.num_shapes &&
+        xcl->frame.draw.text_buffer_start == xcl->frame.num_text)
     {
         return; // nothing to draw
     }
 
-    XVGCommand*     cmd  = _xvg_alloc_command(xcl, XVG_CMD_DRAW, label);
-    XVGCommandDraw* draw = linked_arena_alloc_clear(xcl->frame_arena, sizeof(*draw));
-    cmd->payload.draw    = draw;
+    XVGCommand*     cmd  = _xvg_get_command(xcl, XVG_CMD_DRAW, label);
+    XVGCommandDraw* draw = &cmd->draw;
 
-    draw->shape_buffer_start = xcl->draw_start.shape_buffer_start;
-    draw->shape_buffer_end   = xcl->shapes_buffer_len;
-    draw->shape_texture[0]   = xcl->draw_start.shape_texture[0];
-    draw->shape_texture[1]   = xcl->draw_start.shape_texture[1];
-    draw->shape_texture[2]   = xcl->draw_start.shape_texture[2];
-    draw->shape_texture[3]   = xcl->draw_start.shape_texture[3];
-    draw->shape_sampler      = xcl->draw_start.shape_sampler;
+    *draw = xcl->frame.draw;
+    memset(&xcl->frame.draw, 0, sizeof(xcl->frame.draw));
 
-    draw->text_buffer_start = xcl->draw_start.text_buffer_start;
-    draw->text_buffer_end   = xcl->text_buffer_len;
-    draw->text_texture      = xcl->draw_start.text_texture;
+    draw->shape_buffer_end = xcl->frame.num_shapes;
+    draw->text_buffer_end  = xcl->frame.num_text;
 
-    xcl->draw_start.shape_buffer_start  = xcl->shapes_buffer_len;
-    xcl->draw_start.shape_texture[0].id = 0;
-    xcl->draw_start.shape_texture[1].id = 0;
-    xcl->draw_start.shape_texture[2].id = 0;
-    xcl->draw_start.shape_texture[3].id = 0;
-    xcl->draw_start.shape_sampler.id    = 0;
-    xcl->draw_start.text_buffer_start   = xcl->text_buffer_len;
-    xcl->draw_start.text_texture.id     = 0;
+    xcl->frame.draw.shape_buffer_start = xcl->frame.num_shapes;
+    xcl->frame.draw.text_buffer_start  = xcl->frame.num_text;
 }
 
 void xvg_command_custom(XVGCommandList* xcl, void* uptr, XVGCustomFunc func, const char* label)
 {
     xvg_command_batch_draw(xcl, XVG_LABEL("xvg_command_custom()"));
 
-    XVGCommand*       cmd    = _xvg_alloc_command(xcl, XVG_CMD_CUSTOM, label);
-    XVGCommandCustom* custom = linked_arena_alloc_clear(xcl->frame_arena, sizeof(*custom));
-    cmd->payload.custom      = custom;
+    XVGCommand*       cmd    = _xvg_get_command(xcl, XVG_CMD_CUSTOM, label);
+    XVGCommandCustom* custom = &cmd->custom;
 
     custom->uptr = uptr;
     custom->func = func;
@@ -842,11 +832,10 @@ xvg_shape_t* _xvg_get_shape(XVGCommandList* xcl)
     // Branchless
     static xvg_shape_t stub;
 
-    XVG_ASSERT(xcl->shapes_buffer_len < XVG_ARRLEN(xcl->_shapes_buffer));
-    xvg_shape_t* ret =
-        xcl->shapes_buffer_len < XVG_ARRLEN(xcl->_shapes_buffer) ? &xcl->shapes_buffer[xcl->shapes_buffer_len] : &stub;
+    XVG_ASSERT(xcl->frame.num_shapes < XVG_ARRLEN(xcl->shapes));
+    xvg_shape_t* ret = xcl->frame.num_shapes < XVG_ARRLEN(xcl->shapes) ? &xcl->shapes[xcl->frame.num_shapes] : &stub;
 
-    xcl->shapes_buffer_len++;
+    xcl->frame.num_shapes++;
     return ret;
 }
 
@@ -954,32 +943,32 @@ unsigned _xvg_set_bound_texture(XVGCommandList* xcl, const XVGGradient* grad)
         return 0;
 
     unsigned i = 0;
-    for (; i < XVG_ARRLEN(xcl->draw_start.shape_texture); i++)
+    for (; i < XVG_ARRLEN(xcl->frame.draw.shape_texture); i++)
     {
-        if (xcl->draw_start.shape_texture[i].id == grad->texture.id)
+        if (xcl->frame.draw.shape_texture[i].id == grad->texture.id)
             break;
-        if (xcl->draw_start.shape_texture[i].id == 0)
+        if (xcl->frame.draw.shape_texture[i].id == 0)
         {
-            xcl->draw_start.shape_texture[i] = grad->texture;
+            xcl->frame.draw.shape_texture[i] = grad->texture;
             break;
         }
     }
 
-    bool tex_full = i == XVG_ARRLEN(xcl->draw_start.shape_texture);
-    // bool replace_texture = xcl->draw_start.shape_texture.id != grad->texture.id;
+    bool tex_full = i == XVG_ARRLEN(xcl->frame.draw.shape_texture);
+    // bool replace_texture = xcl->frame.draw.shape_texture.id != grad->texture.id;
     bool replace_sampler =
-        xcl->draw_start.shape_sampler.id != 0 && xcl->draw_start.shape_sampler.id != grad->sampler.id;
+        xcl->frame.draw.shape_sampler.id != 0 && xcl->frame.draw.shape_sampler.id != grad->sampler.id;
     if (tex_full || replace_sampler)
     {
         xvg_command_batch_draw(xcl, XVG_LABEL("_xvg_set_bound_texture"));
 
         i                                = 0;
-        xcl->draw_start.shape_texture[i] = grad->texture;
+        xcl->frame.draw.shape_texture[i] = grad->texture;
     }
 
-    xcl->draw_start.shape_sampler = grad->sampler;
+    xcl->frame.draw.shape_sampler = grad->sampler;
 
-    XVG_ASSERT(i < XVG_ARRLEN(xcl->draw_start.shape_texture));
+    XVG_ASSERT(i < XVG_ARRLEN(xcl->frame.draw.shape_texture));
     return i + 1;
 }
 
@@ -1307,7 +1296,7 @@ void xvg_draw_line_plot(
     float           stroke_width,
     uint32_t        colour)
 {
-    size_t    remaining_capacity = XVG_ARRLEN(xcl->_line_buffer) - xcl->line_buffer_len;
+    size_t    remaining_capacity = XVG_ARRLEN(xcl->line_segments) - xcl->frame.num_line_segments;
     const int backingScaleFactor = xcl->xvg->backingScaleFactor;
 
     int N = width * backingScaleFactor;
@@ -1319,13 +1308,13 @@ void xvg_draw_line_plot(
     if (N <= 0)
         return;
 
-    const uint32_t begin_idx = xcl->line_buffer_len;
-    const uint32_t end_idx   = xcl->line_buffer_len + N;
+    const uint32_t begin_idx = xcl->frame.num_line_segments;
+    const uint32_t end_idx   = xcl->frame.num_line_segments + N;
 
     if (backingScaleFactor == 2)
     {
         // Plain old linear interpolation
-        xvg_line_segment_t* dst      = xcl->line_buffer + begin_idx;
+        xvg_line_segment_t* dst      = xcl->line_segments + begin_idx;
         int                 work_len = N - 2;
         int                 i, j;
 
@@ -1344,8 +1333,8 @@ void xvg_draw_line_plot(
     else
     {
         xassert(backingScaleFactor == 1);
-        xstatic_assert(sizeof(xcl->line_buffer[0]) == sizeof(data[0]), "Must match");
-        memcpy(xcl->line_buffer + begin_idx, data, N * sizeof(xcl->line_buffer[0]));
+        xstatic_assert(sizeof(xcl->line_segments[0]) == sizeof(data[0]), "Must match");
+        memcpy(xcl->line_segments + begin_idx, data, N * sizeof(xcl->line_segments[0]));
     }
 
     XVG_ASSERT(end_idx >= 1);
@@ -1363,8 +1352,8 @@ void xvg_draw_line_plot(
                     .buffer_idx_range    = line_buffer_range,
     };
 
-    xcl->line_buffer_len = end_idx;
-    XVG_ASSERT(xcl->line_buffer_len <= XVG_ARRLEN(xcl->_line_buffer));
+    xcl->frame.num_line_segments = end_idx;
+    XVG_ASSERT(xcl->frame.num_line_segments <= XVG_ARRLEN(xcl->line_segments));
 }
 
 XVGFontSlot* _xvg_get_current_font_slot(XVG* xcl) { return &xcl->fonts[xcl->current_font_idx]; }
@@ -1645,10 +1634,9 @@ xvg_text_t* _xvg_get_text(XVGCommandList* xcl)
 {
     static xvg_text_t stub;
 
-    xvg_text_t* ret =
-        xcl->text_buffer_len < XVG_ARRLEN(xcl->_text_buffer) ? &xcl->text_buffer[xcl->text_buffer_len] : &stub;
+    xvg_text_t* ret = xcl->frame.num_text < XVG_ARRLEN(xcl->text) ? &xcl->text[xcl->frame.num_text] : &stub;
 
-    xcl->text_buffer_len++;
+    xcl->frame.num_text++;
 
     return ret;
 }
@@ -1659,10 +1647,10 @@ bool _xvg_push_glyph(XVGCommandList* xcl, int pen_x, int pen_y, const XVGAtlasRe
     XVG_ASSERT(should_push);
     if (should_push)
     {
-        if (xcl->draw_start.text_texture.id != 0 && xcl->draw_start.text_texture.id != rect->img_view.id)
+        if (xcl->frame.draw.text_texture.id != 0 && xcl->frame.draw.text_texture.id != rect->img_view.id)
             xvg_command_batch_draw(xcl, XVG_LABEL("_xvg_push_glyph"));
-        if (xcl->draw_start.text_texture.id == 0)
-            xcl->draw_start.text_texture = rect->img_view;
+        if (xcl->frame.draw.text_texture.id == 0)
+            xcl->frame.draw.text_texture = rect->img_view;
 
         xvg_text_t* obj = _xvg_get_text(xcl);
         // obj->topleft[0] = pen_x + (int)rect->bearing_x; // If using floating point coords
@@ -1671,7 +1659,7 @@ bool _xvg_push_glyph(XVGCommandList* xcl, int pen_x, int pen_y, const XVGAtlasRe
         obj->atlas_coords = (xvecu){.r = rect->x, .g = rect->y, .b = rect->w, .a = rect->h}.u32;
         obj->colour       = colour;
 
-        XVG_ASSERT(xcl->draw_start.text_texture.id != 0);
+        XVG_ASSERT(xcl->frame.draw.text_texture.id != 0);
     }
     return should_push;
 }
@@ -2249,18 +2237,13 @@ XVGCommandList* xvg_command_list_create(XVG* xvg)
 
     XVGCommandList* xcl = linked_arena_alloc_clear(xvg->arena, sizeof(*xcl));
 
-    xcl->xvg         = xvg;
-    xcl->arena       = xvg->arena;
-    xcl->frame_arena = xvg->frame_arena;
-
-    xcl->shapes_buffer = xcl->_shapes_buffer;
-    xcl->text_buffer   = xcl->_text_buffer;
-    xcl->line_buffer   = xcl->_line_buffer;
+    xcl->xvg   = xvg;
+    xcl->arena = xvg->arena;
 
     xcl->shapes_sbo = sg_make_buffer(&(sg_buffer_desc){
         .usage.storage_buffer = true,
         .usage.stream_update  = true,
-        .size                 = sizeof(xcl->_shapes_buffer),
+        .size                 = sizeof(xcl->shapes),
         .label                = XVG_LABEL("xcl-shapes"),
     });
     xcl->shapes_sbv = sg_make_view(&(sg_view_desc){
@@ -2270,7 +2253,7 @@ XVGCommandList* xvg_command_list_create(XVG* xvg)
     xcl->lines_sbo = sg_make_buffer(&(sg_buffer_desc){
         .usage.storage_buffer = true,
         .usage.stream_update  = true,
-        .size                 = sizeof(xcl->_line_buffer),
+        .size                 = sizeof(xcl->line_segments),
         .label                = XVG_LABEL("xcl-line-buffer"),
     });
     xcl->lines_sbv = sg_make_view(&(sg_view_desc){.storage_buffer = xcl->lines_sbo});
@@ -2278,8 +2261,8 @@ XVGCommandList* xvg_command_list_create(XVG* xvg)
     xcl->text_sbo = sg_make_buffer(&(sg_buffer_desc){
         .usage.storage_buffer = true,
         .usage.stream_update  = true,
-        .size                 = sizeof(xcl->_text_buffer),
-        .label                = "text SBO",
+        .size                 = sizeof(xcl->text),
+        .label                = XVG_LABEL("xcl-text-buffer"),
     });
     XVG_ASSERT(xcl->text_sbo.id);
     xcl->text_sbv = sg_make_view(&(sg_view_desc){
@@ -2323,16 +2306,7 @@ void xvg_end_frame(XVG* xcl)
     }
 }
 
-void xvg_command_list_begin_frame(XVGCommandList* xcl)
-{
-    xcl->first_command   = NULL;
-    xcl->current_command = NULL;
-    memset(&xcl->draw_start, 0, sizeof(xcl->draw_start));
-
-    xcl->shapes_buffer_len = 0;
-    xcl->line_buffer_len   = 0;
-    xcl->text_buffer_len   = 0;
-}
+void xvg_command_list_begin_frame(XVGCommandList* xcl) { memset(&xcl->frame, 0, sizeof(xcl->frame)); }
 
 void xvg_command_list_end_frame(XVGCommandList* xcl, int window_width, int window_height)
 {
@@ -2340,44 +2314,48 @@ void xvg_command_list_end_frame(XVGCommandList* xcl, int window_width, int windo
     XVG* x = xcl->xvg;
 
     // Upload data
-    if (xcl->shapes_buffer_len)
+    if (xcl->frame.num_shapes)
     {
-        if (xcl->shapes_buffer_len > XVG_ARRLEN(xcl->_shapes_buffer))
-            xcl->shapes_buffer_len = XVG_ARRLEN(xcl->_shapes_buffer);
-        size_t   num_bytes = sizeof(xcl->shapes_buffer[0]) * xcl->shapes_buffer_len;
-        sg_range range     = {.ptr = xcl->shapes_buffer, .size = num_bytes};
+        if (xcl->frame.num_shapes > XVG_ARRLEN(xcl->shapes))
+            xcl->frame.num_shapes = XVG_ARRLEN(xcl->shapes);
+        size_t   num_bytes = sizeof(xcl->shapes[0]) * xcl->frame.num_shapes;
+        sg_range range     = {.ptr = xcl->shapes, .size = num_bytes};
         sg_update_buffer(xcl->shapes_sbo, &range);
     }
-    if (xcl->line_buffer_len)
+    if (xcl->frame.num_line_segments)
     {
-        if (xcl->line_buffer_len > XVG_ARRLEN(xcl->_line_buffer))
-            xcl->line_buffer_len = XVG_ARRLEN(xcl->_line_buffer);
-        size_t   num_bytes = sizeof(xcl->line_buffer[0]) * xcl->line_buffer_len;
-        sg_range range     = {.ptr = xcl->line_buffer, .size = num_bytes};
+        if (xcl->frame.num_line_segments > XVG_ARRLEN(xcl->line_segments))
+            xcl->frame.num_line_segments = XVG_ARRLEN(xcl->line_segments);
+        size_t   num_bytes = sizeof(xcl->line_segments[0]) * xcl->frame.num_line_segments;
+        sg_range range     = {.ptr = xcl->line_segments, .size = num_bytes};
         sg_update_buffer(xcl->lines_sbo, &range);
     }
-    if (xcl->text_buffer_len)
+    if (xcl->frame.num_text)
     {
-        if (xcl->text_buffer_len > XVG_ARRLEN(xcl->_text_buffer))
-            xcl->text_buffer_len = XVG_ARRLEN(xcl->_text_buffer);
+        if (xcl->frame.num_text > XVG_ARRLEN(xcl->text))
+            xcl->frame.num_text = XVG_ARRLEN(xcl->text);
 
-        size_t   num_bytes = sizeof(xcl->text_buffer[0]) * xcl->text_buffer_len;
-        sg_range range     = {.ptr = xcl->text_buffer, .size = num_bytes};
+        size_t   num_bytes = sizeof(xcl->text[0]) * xcl->frame.num_text;
+        sg_range range     = {.ptr = xcl->text, .size = num_bytes};
         sg_update_buffer(xcl->text_sbo, &range);
     }
 
     // Process commands
-    int         ncommands        = 0;
-    int         num_batch_groups = 0;
-    XVGCommand* cmd              = xcl->first_command;
-    while (cmd != NULL)
+    int ncommands        = 0;
+    int num_batch_groups = 0;
+    int cmd_idx          = xcl->frame.first_command_idx;
+    while (cmd_idx > 0 && cmd_idx < XVG_ARRLEN(xcl->commands))
     {
+        XVGCommand* cmd = xcl->commands + cmd_idx;
         switch (cmd->type)
         {
+        case XVG_CMD_NONE:
+            break;
         case XVG_CMD_BEGIN_PASS:
         {
-            XVGCommandBeginPass* p = cmd->payload.beginPass;
-            sg_begin_pass(&p->pass);
+            XVGCommandBeginPass* p = &cmd->beginPass;
+            XVG_ASSERT(p->pass_idx > 0 && p->pass_idx < XVG_ARRLEN(xcl->passes));
+            sg_begin_pass(&xcl->passes[p->pass_idx]);
             break;
         }
         case XVG_CMD_END_PASS:
@@ -2385,19 +2363,19 @@ void xvg_command_list_end_frame(XVGCommandList* xcl, int window_width, int windo
             break;
         case XVG_CMD_SET_SCISSOR:
         {
-            XVGCommandSetScissor* s = cmd->payload.scissor;
+            XVGCommandSetScissor* s = &cmd->scissor;
             sg_apply_scissor_rect(s->x, s->y, s->w, s->h, true);
             break;
         }
         case XVG_CMD_SET_VIEWPORT:
         {
-            XVGCommandSetViewport* s = cmd->payload.viewport;
+            XVGCommandSetViewport* s = &cmd->viewport;
             sg_apply_viewport(s->x, s->y, s->w, s->h, true);
             break;
         }
         case XVG_CMD_CUSTOM:
         {
-            XVGCommandCustom* custom = cmd->payload.custom;
+            XVGCommandCustom* custom = &cmd->custom;
             custom->func(custom->uptr);
             break;
         }
@@ -2405,7 +2383,10 @@ void xvg_command_list_end_frame(XVGCommandList* xcl, int window_width, int windo
         {
             num_batch_groups++;
 
-            XVGCommandDraw* draw = cmd->payload.draw;
+            XVGCommandDraw* draw = &cmd->draw;
+
+            draw->shape_buffer_start = xm_mini(draw->shape_buffer_start, XVG_ARRLEN(xcl->shapes));
+            draw->shape_buffer_end   = xm_mini(draw->shape_buffer_end, XVG_ARRLEN(xcl->shapes));
 
             const int num_shapes = draw->shape_buffer_end - draw->shape_buffer_start;
             XVG_ASSERT(num_shapes >= 0);
@@ -2462,6 +2443,9 @@ void xvg_command_list_end_frame(XVGCommandList* xcl, int window_width, int windo
                 sg_draw(0, 6 * num_shapes, 1);
             }
 
+            draw->text_buffer_start = xm_mini(draw->text_buffer_start, XVG_ARRLEN(xcl->text));
+            draw->text_buffer_end   = xm_mini(draw->text_buffer_end, XVG_ARRLEN(xcl->text));
+
             const int num_text = draw->text_buffer_end - draw->text_buffer_start;
             XVG_ASSERT(num_text >= 0);
             if (num_text)
@@ -2486,7 +2470,8 @@ void xvg_command_list_end_frame(XVGCommandList* xcl, int window_width, int windo
         }
         }
 
-        cmd = cmd->next;
+        XVG_ASSERT(cmd->next_idx >= 0 && cmd->next_idx < XVG_ARRLEN(xcl->commands));
+        cmd_idx = cmd->next_idx;
         ncommands++;
     }
 }
