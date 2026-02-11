@@ -205,18 +205,19 @@ void main() {
 
     if (grad_type == XVG_COLOUR_LINEAR_GRADIENT)
     {
-        gradient_a = (vert.gradient_a - vert.topleft) / vec2(vw, vh);  // stop 1 xy
+        gradient_a = (vert.gradient_a - vert.topleft) / vec2(vw, vh); // stop 1 xy
         gradient_b = (vert.gradient_b - vert.topleft) / vec2(vw, vh); // stop 2 xy
     }
     if (grad_type == XVG_COLOUR_RADIAL_GRADIENT)
     {
         gradient_a = (vert.gradient_a - vert.topleft) / vec2(vw, vh); // stop 2 cx,cy
-        gradient_b = vec2(vw, vh) / vert.gradient_b;                    // stop 1 radius
+        gradient_b = vec2(vw, vh) / vert.gradient_b;                  // stop 1 radius
     }
     if (grad_type == XVG_COLOUR_CONIC_GRADIENT)
     {
-        gradient_a = vec2(cos(vert.gradient_a.x), sin(vert.gradient_a.x)); // rotation, radians
-        gradient_b = vert.gradient_b;                                      // range, radians
+        float rotation = vert.gradient_a.x* 2 * PI;      // turns to radians
+        gradient_a = vec2(cos(rotation), sin(rotation)); // rotation
+        gradient_b = vert.gradient_b;                    // range (turns)
     }
     if (grad_type == XVG_COLOUR_DROP_SHADOW || grad_type == XVG_COLOUR_INNER_SHADOW)
     {

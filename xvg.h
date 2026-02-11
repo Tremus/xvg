@@ -10,13 +10,13 @@
 // TODO: increase max stroke width for line plots
 // TODO: support fallback fonts for missing glyphs
 // TODO: support intelligent batching of text when using multiple atlases
-         The simplest solution is probably to bind all atlases at once at include a atlas index to put in a switch case
+         The simplest solution is probably to bind all atlases at once at include an atlas index to put in a switch case
          in the text shader
-// TODO: finish implementing all text alignment stuff, namely multiline centre & right alignment
+// TODO: finish implementing all text alignment stuff, namely multiline centre & right alignment. This will be easy once
+         all text atlases are bound together
 // TODO: support colour gradients for text
 // TODO: provide a simple atlas abstraction so users can render icons with something like nanosvg into the atlas
 // TODO: provide functions for clearing atlases. Possibly useful when resizing windows
-// TODO: remove radians from conic gradients
 */
 
 // #ifdef __cplusplus
@@ -401,7 +401,7 @@ void xvg_command_list_end_frame(XVGCommandList* xcl, int window_width, int windo
 // filled. Values are in pixels. Stroking is done on the INSIDE of the shape, so you always get accurate widths
 // Strokes have a maximum width of 15 with 2 exceptions: line plots (2px max), arcs & rounded line_segments (31px max)
 // 'radius' is in pixels
-// 'angle' and 'rotate' are in the less convential but greatly superior 'turns'.
+// 'angle' and 'rotate' are in the less convential but greatly superior 'turns', which is normalised 2pi.
 // 0 turns == 0 degrees/0pi. 1 turn == 360 degrees/2pi, 0.25 turn = halfpi/90deg etc.
 // Colours are in the highly unintuitive but highly readable ABGR format (0xffff007f is yellow, 50% opacity). This makes
 // it easy to copy paste hex codes from apps like Figma, Photoshop, or web browsers. This library swizzles to RGBA
@@ -873,18 +873,16 @@ XVGGradient xvg_make_radial_gradient(
     };
 }
 
-XVGGradient
-xvg_make_conic_gradient(uint32_t col_stop_1, uint32_t col_stop_2, float radians_stop_1, float radians_stop_2)
+XVGGradient xvg_make_conic_gradient(uint32_t col_stop_1, uint32_t col_stop_2, float turn_stop_1, float turn_stop_2)
 {
-    float range = radians_stop_2 - radians_stop_1;
-    float a     = XM_PIf + radians_stop_1;
-    float b     = range * XM_1_TAUf;
+    float angle = 0.5f + turn_stop_1;
+    float range = turn_stop_2 - turn_stop_1;
     return (XVGGradient){
         .type       = XVG_COLOUR_CONIC_GRADIENT,
         .colour1    = col_stop_1,
         .colour2    = col_stop_2,
-        .gradient_a = {a, a},
-        .gradient_b = {b, b},
+        .gradient_a = {angle, angle},
+        .gradient_b = {range, range},
     };
 }
 
