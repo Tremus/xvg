@@ -377,6 +377,10 @@ typedef struct XVGCommandList
     xvg_text_t         text[XVG_TEXT_CAPACITY];
 } XVGCommandList;
 
+// Line indexes max out at UIN16_MAX. It's required by the shader
+// If you need more, consider using a custom shader
+_Static_assert(XVG_LINE_SEGMENTS_CAPACITY <= (1 << 16) - 1, "It's not going to fit!");
+
 void xvg_init(XVG*);
 void xvg_deinit(XVG*);
 
