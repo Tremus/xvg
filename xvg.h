@@ -631,7 +631,7 @@ void xvg_draw_text_layout(XVGCommandList* xcl, const XVGTextLayout* layout, int 
 
 #include <string.h>
 #include <utf8.h>
-#include <xhl/array.h>
+#include <xhl/array2.h>
 #include <xhl/debug.h>
 #include <xhl/files.h>
 #include <xhl/maths.h>
