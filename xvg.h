@@ -391,6 +391,17 @@ void xvg_command_set_viewport(XVGCommandList*, int x, int y, int w, int h, const
 void xvg_command_batch_draw(XVGCommandList*, const char* label);
 void xvg_command_custom(XVGCommandList*, void* uptr, XVGCustomFunc func, const char* label);
 
+// You use this can reorder items in the list
+typedef struct XVGCommandListRange
+{
+    unsigned begin_idx;
+    unsigned end_idx;
+    unsigned begin_num_commands;
+} XVGCommandListRange;
+XVGCommandListRange xvg_command_list_pop_begin(XVGCommandList* xcl);
+void                xvg_command_list_pop_end(XVGCommandList* xcl, XVGCommandListRange* range);
+void                xvg_command_list_join(XVGCommandList* xcl, XVGCommandListRange* range);
+
 void xvg_begin_frame(XVG*);
 void xvg_end_frame(XVG*);
 void xvg_command_list_begin_frame(XVGCommandList* xcl);
@@ -829,6 +840,44 @@ void xvg_command_custom(XVGCommandList* xcl, void* uptr, XVGCustomFunc func, con
 
     custom->uptr = uptr;
     custom->func = func;
+}
+
+struct XVGCommandListRange xvg_command_list_pop_begin(XVGCommandList* xcl)
+{
+    xvg_command_batch_draw(xcl, XVG_LABEL("xvg_command_list_pop_begin"));
+    struct XVGCommandListRange range = {0};
+
+    range.begin_idx          = xcl->frame.last_command_idx;
+    range.begin_num_commands = xcl->frame.num_commands; // num_commands + 1 will be where the next command is
+
+    XVG_ASSERT(range.begin_idx != 0);
+    return range;
+}
+void xvg_command_list_pop_end(XVGCommandList* xcl, struct XVGCommandListRange* range)
+{
+    xvg_command_batch_draw(xcl, XVG_LABEL("xvg_command_list_pop_end"));
+
+    range->end_idx = xcl->frame.last_command_idx;
+
+    xcl->commands[range->begin_idx].next_idx = 0;
+
+    xcl->frame.last_command_idx = range->begin_idx;
+    XVG_ASSERT(range->begin_idx != 0);
+    XVG_ASSERT(range->begin_idx != range->end_idx);
+}
+
+void xvg_command_list_join(XVGCommandList* xcl, struct XVGCommandListRange* range)
+{
+    xvg_command_batch_draw(xcl, XVG_LABEL("xvg_command_list_join"));
+
+    if (range->end_idx == 0)
+        return;
+
+    XVG_ASSERT(range->begin_idx != 0);
+
+    xcl->commands[xcl->frame.last_command_idx].next_idx = range->begin_num_commands + 1;
+
+    xcl->frame.last_command_idx = range->end_idx;
 }
 
 // ███████╗██╗  ██╗ █████╗ ██████╗ ███████╗███████╗
@@ -2353,8 +2402,10 @@ void xvg_command_list_end_frame(XVGCommandList* xcl, int window_width, int windo
     int ncommands        = 0;
     int num_batch_groups = 0;
     int cmd_idx          = xcl->frame.first_command_idx;
-    while (cmd_idx > 0 && cmd_idx < XVG_ARRLEN(xcl->commands))
+    int inf_protection   = 0;
+    while (cmd_idx > 0 && cmd_idx < XVG_ARRLEN(xcl->commands) && inf_protection++ < XVG_ARRLEN(xcl->commands))
     {
+        XVG_ASSERT(inf_protection < XVG_ARRLEN(xcl->commands));
         XVGCommand* cmd = xcl->commands + cmd_idx;
         switch (cmd->type)
         {
