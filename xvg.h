@@ -399,7 +399,7 @@ typedef struct XVGCommandListRange
     unsigned begin_num_commands;
 } XVGCommandListRange;
 XVGCommandListRange xvg_command_list_pop_begin(XVGCommandList* xcl);
-void                xvg_command_list_pop_end(XVGCommandList* xcl, XVGCommandListRange* range);
+XVGCommandListRange xvg_command_list_pop_end(XVGCommandList* xcl, XVGCommandListRange* range);
 void                xvg_command_list_join(XVGCommandList* xcl, XVGCommandListRange* range);
 
 void xvg_begin_frame(XVG*);
@@ -853,7 +853,7 @@ struct XVGCommandListRange xvg_command_list_pop_begin(XVGCommandList* xcl)
     XVG_ASSERT(range.begin_idx != 0);
     return range;
 }
-void xvg_command_list_pop_end(XVGCommandList* xcl, struct XVGCommandListRange* range)
+XVGCommandListRange xvg_command_list_pop_end(XVGCommandList* xcl, XVGCommandListRange* range)
 {
     xvg_command_batch_draw(xcl, XVG_LABEL("xvg_command_list_pop_end"));
 
@@ -864,9 +864,10 @@ void xvg_command_list_pop_end(XVGCommandList* xcl, struct XVGCommandListRange* r
     xcl->frame.last_command_idx = range->begin_idx;
     XVG_ASSERT(range->begin_idx != 0);
     XVG_ASSERT(range->begin_idx != range->end_idx);
+    return *range;
 }
 
-void xvg_command_list_join(XVGCommandList* xcl, struct XVGCommandListRange* range)
+void xvg_command_list_join(XVGCommandList* xcl, XVGCommandListRange* range)
 {
     xvg_command_batch_draw(xcl, XVG_LABEL("xvg_command_list_join"));
 
