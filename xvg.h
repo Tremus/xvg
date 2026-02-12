@@ -620,6 +620,17 @@ static void xvg_release_text_layout(XVGCommandList* xcl, const XVGTextLayout* la
 };
 void xvg_draw_text_layout(XVGCommandList* xcl, const XVGTextLayout* layout, int x, int y, int align, uint32_t col);
 
+static unsigned xvg_colour_set_alpha_u8(unsigned col, unsigned char alpha) { return (col & 0xffffff00) | alpha; }
+static unsigned xvg_colour_set_alpha_f32(unsigned col, float alpha)
+{
+    int alphai32 = alpha * 255;
+    if (alphai32 < 0)
+        alphai32 = 0;
+    if (alphai32 > 255)
+        alphai32 = 255;
+    return xvg_colour_set_alpha_u8(col, (unsigned char)alphai32);
+}
+
 // #ifdef __cplusplus
 // }
 // #endif
