@@ -1783,7 +1783,10 @@ const XVGTextLayout* xvg_create_text_layout(
     if (!sl->ft_face)
         return &stub;
 
+    XVG_ASSERT(font_size > 0);
     XVG_ASSERT(font_size < 128);
+    if (font_size < 6) // Can text be smaller than 6?
+        font_size = 6;
     if (text_end == NULL)
         text_end = text_start + strlen(text_start);
     const size_t text_len           = text_end - text_start;
