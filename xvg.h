@@ -795,10 +795,11 @@ void xvg_command_set_scissor(XVGCommandList* xcl, int x, int y, int w, int h, co
     XVGCommand*           cmd = _xvg_get_command(xcl, XVG_CMD_SET_SCISSOR, label);
     XVGCommandSetScissor* ss  = &cmd->scissor;
 
-    ss->x = x;
-    ss->y = y;
-    ss->w = w;
-    ss->h = h;
+    float scale = xcl->xvg->backingScaleFactor;
+    ss->x       = x * scale;
+    ss->y       = y * scale;
+    ss->w       = w * scale;
+    ss->h       = h * scale;
 }
 
 void xvg_command_set_viewport(XVGCommandList* xcl, int x, int y, int w, int h, const char* label)
