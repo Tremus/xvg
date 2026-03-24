@@ -640,10 +640,9 @@ void main()
 
 struct xvg_text
 {
-    // vec2 topleft;
     uint topleft; // Unorm2x16. Contains signed xy coords, requires -32767 delta
     uint atlas_coords; // Unorm4x8
-
+    uint atlas_idx;
     uint colour; // Unorm4x8
 };
 
@@ -657,6 +656,7 @@ layout(binding=0) uniform vs_xvg_text_uniforms {
 };
 
 out vec2 texcoord;
+out flat uint atlas_idx;
 out flat vec4 colour;
 
 void main() {
@@ -682,6 +682,8 @@ void main() {
         is_bottom ? (atlas_coords.y + atlas_coords.w) : atlas_coords.y
     );
 
+    atlas_idx = obj.atlas_idx;
+
     vec2 topleft = unpackUnorm2x16(obj.topleft) * vec2(65535) - vec2(32767);
     // vec2 topleft = obj.topleft;
 
@@ -698,26 +700,60 @@ void main() {
 @end
 
 @fs fs_xvg_text_singlechannel
-layout(binding=1) uniform texture2D fs_xvg_text_tex;
 layout(binding=0) uniform sampler fs_xvg_text_smp;
+layout(binding=1) uniform texture2D fs_xvg_text_atlas1;
+layout(binding=2) uniform texture2D fs_xvg_text_atlas2;
+layout(binding=3) uniform texture2D fs_xvg_text_atlas3;
+layout(binding=4) uniform texture2D fs_xvg_text_atlas4;
+layout(binding=5) uniform texture2D fs_xvg_text_atlas5;
+layout(binding=6) uniform texture2D fs_xvg_text_atlas6;
+layout(binding=7) uniform texture2D fs_xvg_text_atlas7;
+layout(binding=8) uniform texture2D fs_xvg_text_atlas8;
 
 in vec2 texcoord;
+in flat uint atlas_idx;
 in flat vec4 colour;
 
 out vec4 frag_colour;
 
 void main() {
     ivec2 itexcoord = ivec2(texcoord);
-    float alpha = texelFetch(sampler2D(fs_xvg_text_tex, fs_xvg_text_smp), itexcoord, 0).r;
+    float alpha;
+
+    if (atlas_idx == 1)
+        alpha = texelFetch(sampler2D(fs_xvg_text_atlas1, fs_xvg_text_smp), itexcoord, 0).r;
+    if (atlas_idx == 2)
+        alpha = texelFetch(sampler2D(fs_xvg_text_atlas2, fs_xvg_text_smp), itexcoord, 0).r;
+    if (atlas_idx == 3)
+        alpha = texelFetch(sampler2D(fs_xvg_text_atlas3, fs_xvg_text_smp), itexcoord, 0).r;
+    if (atlas_idx == 4)
+        alpha = texelFetch(sampler2D(fs_xvg_text_atlas4, fs_xvg_text_smp), itexcoord, 0).r;
+    if (atlas_idx == 5)
+        alpha = texelFetch(sampler2D(fs_xvg_text_atlas5, fs_xvg_text_smp), itexcoord, 0).r;
+    if (atlas_idx == 6)
+        alpha = texelFetch(sampler2D(fs_xvg_text_atlas6, fs_xvg_text_smp), itexcoord, 0).r;
+    if (atlas_idx == 7)
+        alpha = texelFetch(sampler2D(fs_xvg_text_atlas7, fs_xvg_text_smp), itexcoord, 0).r;
+    if (atlas_idx == 8)
+        alpha = texelFetch(sampler2D(fs_xvg_text_atlas8, fs_xvg_text_smp), itexcoord, 0).r;
+
     frag_colour = vec4(colour.rgb, colour.a * alpha);
 }
 @end
 
 @fs fs_xvg_text_multichannel
-layout(binding=1) uniform texture2D fs_xvg_text_tex;
 layout(binding=0) uniform sampler fs_xvg_text_smp;
+layout(binding=1) uniform texture2D fs_xvg_text_atlas1;
+layout(binding=2) uniform texture2D fs_xvg_text_atlas2;
+layout(binding=3) uniform texture2D fs_xvg_text_atlas3;
+layout(binding=4) uniform texture2D fs_xvg_text_atlas4;
+layout(binding=5) uniform texture2D fs_xvg_text_atlas5;
+layout(binding=6) uniform texture2D fs_xvg_text_atlas6;
+layout(binding=7) uniform texture2D fs_xvg_text_atlas7;
+layout(binding=8) uniform texture2D fs_xvg_text_atlas8;
 
 in vec2 texcoord;
+in flat uint atlas_idx;
 in flat vec4 colour;
 
 layout(location=0, index=0) out vec4 frag_colour;
@@ -727,11 +763,32 @@ void main() {
     // Normalised coords are too unreliable, even if the texture atlas is very small and when we're using
     // 'nearest neighbour' samplers, they really aren't great at finding the sample we want...
     ivec2 itexcoord = ivec2(texcoord);
-    vec3 pixel_coverages = texelFetch(sampler2D(fs_xvg_text_tex, fs_xvg_text_smp), itexcoord, 0).rgb;
+
+    // vec3 pixel_coverages = texelFetch(sampler2D(fs_xvg_text_tex, fs_xvg_text_smp), itexcoord, 0).rgb;
     // vec3 pixel_coverages = texture(sampler2D(fs_xvg_text_tex, fs_xvg_text_smp), texcoord).rgb;
 
-    frag_colour = colour * vec4(pixel_coverages, 1);
-	blend_weights = vec4(colour.a * pixel_coverages, colour.a);
+    // NOTE: if we start text_idx from 1, then its really obvious when we haven't initialised it
+    vec4 pixel_coverages;
+    if (atlas_idx == 1)
+        pixel_coverages = texelFetch(sampler2D(fs_xvg_text_atlas1, fs_xvg_text_smp), itexcoord, 0);
+    if (atlas_idx == 2)
+        pixel_coverages = texelFetch(sampler2D(fs_xvg_text_atlas2, fs_xvg_text_smp), itexcoord, 0);
+    if (atlas_idx == 3)
+        pixel_coverages = texelFetch(sampler2D(fs_xvg_text_atlas3, fs_xvg_text_smp), itexcoord, 0);
+    if (atlas_idx == 4)
+        pixel_coverages = texelFetch(sampler2D(fs_xvg_text_atlas4, fs_xvg_text_smp), itexcoord, 0);
+    if (atlas_idx == 5)
+        pixel_coverages = texelFetch(sampler2D(fs_xvg_text_atlas5, fs_xvg_text_smp), itexcoord, 0);
+    if (atlas_idx == 6)
+        pixel_coverages = texelFetch(sampler2D(fs_xvg_text_atlas6, fs_xvg_text_smp), itexcoord, 0);
+    if (atlas_idx == 7)
+        pixel_coverages = texelFetch(sampler2D(fs_xvg_text_atlas7, fs_xvg_text_smp), itexcoord, 0);
+    if (atlas_idx == 8)
+        pixel_coverages = texelFetch(sampler2D(fs_xvg_text_atlas8, fs_xvg_text_smp), itexcoord, 0);
+
+
+    frag_colour = colour * vec4(pixel_coverages.rgb, 1);
+	blend_weights = vec4(colour.a * pixel_coverages.rgb, colour.a);
 }
 @end
 
