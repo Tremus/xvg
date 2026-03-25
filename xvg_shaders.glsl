@@ -34,7 +34,6 @@ struct xvg_shape
     vec2 gradient_b;
 
     uint buffer_idx_range; // unorm2x16
-    // uint  texid; // ???
 
     uint texcoords_xy; // unorm2x16
     uint texcoords_wh; // unorm2x16

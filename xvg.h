@@ -1067,6 +1067,7 @@ void xvg_draw_circle_with_gradient(
                     .texcoords_wh = grad.wh,
     };
 }
+
 void xvg_draw_circle(XVGCommandList* xcl, float cx, float cy, float radius_px, float stroke_width, uint32_t col)
 {
     XVGGradient grad = {.colour1 = col};
@@ -1188,6 +1189,7 @@ void xvg_draw_triangle_with_gradient(
                     .texcoords_wh        = grad.wh,
     };
 }
+
 void xvg_draw_triangle(
     XVGCommandList* xcl,
     float           x,
@@ -1840,7 +1842,7 @@ const XVGTextLayout* xvg_create_text_layout(
     unsigned    prev_glyph_idx = 0;
 
     int     num_glyphs_at_last_space = 0;
-    int64_t CursorX_after_last_space = 0;
+    int64_t CursorX_at_last_space    = 0;
     int     line_max_at_last_space   = 0;
     while (iter != text_end)
     {
@@ -1868,7 +1870,7 @@ const XVGTextLayout* xvg_create_text_layout(
             line_ymax      = 0;
 
             num_glyphs_at_last_space = 0;
-            CursorX_after_last_space = 0;
+            CursorX_at_last_space    = 0;
             line_max_at_last_space   = 0;
 
             CursorX  = 0;
@@ -1893,6 +1895,7 @@ const XVGTextLayout* xvg_create_text_layout(
                 glyph.rect.advance_x     = space_advance;
                 line_max_at_last_space   = line_xmax;
                 num_glyphs_at_last_space = layout->num_glyphs;
+                CursorX_at_last_space    = CursorX;
             }
 
             bool add_to_metadata = layout->num_glyphs < layout->cap_glyphs;
@@ -1915,13 +1918,10 @@ const XVGTextLayout* xvg_create_text_layout(
             CursorX        += glyph.rect.advance_x;
             prev_glyph_idx  = glyph_idx;
 
-            if (cp.i32 == 32) // space
-                CursorX_after_last_space = CursorX;
-
             bool should_break_word = line_xmax > break_row_x_px;
             if (should_break_word)
             {
-                CursorX  = CursorX_after_last_space > 0 ? (CursorX - CursorX_after_last_space) : 0;
+                CursorX  = CursorX_at_last_space > 0 ? (CursorX - CursorX_at_last_space - space_advance) : 0;
                 CursorY += line_height;
                 XVG_ASSERT(CursorX >= 0);
 
@@ -1956,8 +1956,20 @@ const XVGTextLayout* xvg_create_text_layout(
                     XVG_ASSERT(prev_row->xmax <= break_row_x_px);
                     layout_xmax = xm_maxi(layout_xmax, prev_row->xmax);
                 }
+
                 current_row->begin_idx = num_glyphs_at_last_space;
                 current_row->end_idx   = end_idx > 0 ? end_idx : layout->num_glyphs;
+
+                // Skip spaces in new line
+                for (int i = current_row->begin_idx; i < layout->num_glyphs; i++)
+                {
+                    XVGGlyphLayout* g = &glyphs[i];
+                    if (g->rect.header.glyph_index == 0)
+                        current_row->begin_idx++;
+                    else
+                        break;
+                }
+
                 XVG_ASSERT(current_row->begin_idx <= current_row->end_idx);
 
                 if (current_row->begin_idx < layout->num_glyphs)
@@ -1980,7 +1992,7 @@ const XVGTextLayout* xvg_create_text_layout(
                 layout_xmax = xm_maxi(layout_xmax, line_xmax);
 
                 num_glyphs_at_last_space = -1;
-                CursorX_after_last_space = -1;
+                CursorX_at_last_space    = -1;
                 line_max_at_last_space   = 0;
 
                 // This awful looking code helps to skip multiple spaces that may appear at the beginning of a new line
@@ -2114,6 +2126,8 @@ void xvg_draw_text_layout(
             bool should_draw_underline     = !!(dec & XVG_DECORATION_UNDERLINE);
             bool should_draw_strikethorugh = !!(dec & XVG_DECORATION_STRIKETHROUGH);
 
+            // TODO: draw underline in segments, leaving gaps between glyphs that descend below the baseline.
+            //       eg. lowercase 'g' and 'y'
             if (should_draw_underline)
                 xvg_draw_solid_rectangle(xcl, row_x_left, y_baseline + underline_delta, row->xmax, thicc, colour);
             if (should_draw_strikethorugh)
