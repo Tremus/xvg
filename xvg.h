@@ -9,8 +9,6 @@
 /*
 // TODO: increase max stroke width for line plots
 // TODO: support fallback fonts for missing glyphs
-// TODO: finish implementing all text alignment stuff, namely multiline centre & right alignment. This will be easy once
-         all text atlases are bound together
 // TODO: support colour gradients for text
 // TODO: provide a simple atlas abstraction so users can render icons with something like nanosvg into the atlas
 // TODO: provide functions for clearing atlases. Possibly useful when resizing windows
@@ -137,7 +135,6 @@ typedef struct XVGFontSlot
 } XVGFontSlot;
 
 // Used to identify a unique glyph.
-// TODO: support multiple fonts
 typedef union XVGAtlasRectHeader
 {
     struct
@@ -244,7 +241,7 @@ typedef struct XVG
     } current_atlas;
 
 #ifndef XVG_MAX_FONT_SLOTS
-#define XVG_MAX_FONT_SLOTS 4
+#define XVG_MAX_FONT_SLOTS 8
 #endif // XVG_MAX_FONT_SLOTS
 
     // Will default to the first font a user passes the library
@@ -306,8 +303,6 @@ typedef enum XVGCommandType
     XVG_CMD_CUSTOM,
 } XVGCommandType;
 
-// TODO: Make this a big fat union and store everything in a fixed size array
-//       Replace the sg_pass field in XVGCommandBeginPass with an index into a fixed size array of sg_pass
 typedef struct XVGCommand
 {
     XVGCommandType type;
@@ -1662,9 +1657,8 @@ int _xvg_raster_glyph(XVG* xcl, uint32_t glyph_index, unsigned font_size)
 }
 
 // Get cached rect. Rasters the rect to an atlas if not already cached
-// TODO: also compare font id
 // TODO: use fallback fonts. This may require accepting utf32 codepoints to detect language
-XVGAtlasRect _xvg_get_glyph(XVG* xcl, uint32_t glyph_index, unsigned font_size)
+XVGAtlasRect _xvg_get_atlas_rect(XVG* xcl, uint32_t glyph_index, unsigned font_size)
 {
     const int num_rects = xarr_len(xcl->atlas_rects);
 
@@ -1718,7 +1712,6 @@ xvg_text_t* _xvg_get_text(XVGCommandList* xcl)
 bool _xvg_push_glyph(XVGCommandList* xcl, int pen_x, int pen_y, const XVGAtlasRect* rect, uint32_t colour)
 {
     bool should_push = rect->header.atlas_idx != 0;
-    XVG_ASSERT(should_push);
     if (should_push)
     {
         xvg_text_t* obj = _xvg_get_text(xcl);
@@ -1767,7 +1760,7 @@ void _xvg_end_row(XVGTextLayout* layout, int ymin, int ymax, int cursor_y_px)
             row->end_idx     = layout->num_glyphs;
             row->ymin        = ymin;
             row->ymax        = ymax;
-            row->xmax        = g->x + g->rect.w;
+            row->xmax        = g->x + g->rect.w + g->rect.bearing_x;
             row->cursor_y_px = cursor_y_px;
         }
     }
@@ -1826,7 +1819,8 @@ const XVGTextLayout* xvg_create_text_layout(
     const int64_t space_advance = FT_MulFix(sl->space_advance, m->x_scale) / 2;
 
     // Clang-cl makes INT64_MAX a negative integer if we aren't super explicit with types here
-    const int64_t break_row_x = break_width != 0 ? (int64_t)(break_width * 64) : (int64_t)INT64_MAX;
+    const int64_t break_row_x    = break_width != 0 ? (int64_t)(break_width * 64) : (int64_t)INT64_MAX;
+    const int64_t break_row_x_px = break_row_x >> 6;
     XVG_ASSERT(break_row_x >= 0);
 
     int64_t CursorX = 0, CursorY = 0;
@@ -1840,6 +1834,7 @@ const XVGTextLayout* xvg_create_text_layout(
 
     int     num_glyphs_at_last_space = 0;
     int64_t CursorX_after_last_space = 0;
+    int     line_max_at_last_space   = 0;
     while (iter != text_end)
     {
         union XVGCodepoint
@@ -1868,6 +1863,7 @@ const XVGTextLayout* xvg_create_text_layout(
 
             num_glyphs_at_last_space = 0;
             CursorX_after_last_space = 0;
+            line_max_at_last_space   = 0;
 
             CursorX  = 0;
             CursorY += line_height;
@@ -1879,42 +1875,43 @@ const XVGTextLayout* xvg_create_text_layout(
             unsigned glyph_idx = FT_Get_Char_Index(face, cp.i32);
             XVG_ASSERT(glyph_idx != 0);
 
-            XVGAtlasRect rect = _xvg_get_glyph(xcl->xvg, glyph_idx, font_size);
-
-            bool add_to_metadata = layout->num_glyphs < layout->cap_glyphs;
+            XVGGlyphLayout glyph = {
+                .rect = _xvg_get_atlas_rect(xcl->xvg, glyph_idx, font_size),
+            };
 
             if (cp.i32 == 32) // space
             {
-                rect.w         = space_advance >> 6;
-                rect.advance_x = space_advance;
+                glyph.rect.w             = space_advance >> 6;
+                glyph.rect.advance_x     = space_advance;
+                line_max_at_last_space   = line_xmax;
+                num_glyphs_at_last_space = layout->num_glyphs;
             }
 
+            bool add_to_metadata = layout->num_glyphs < layout->cap_glyphs;
             if (add_to_metadata)
             {
-                line_ymax = xm_maxi(line_ymax, rect.bearing_y);
-                line_ymin = xm_mini(line_ymin, rect.bearing_y - rect.h);
+                line_ymax = xm_maxi(line_ymax, glyph.rect.bearing_y);
+                line_ymin = xm_mini(line_ymin, glyph.rect.bearing_y - glyph.rect.h);
                 FT_Vector kerning;
                 FT_Get_Kerning(face, prev_glyph_idx, glyph_idx, FT_KERNING_DEFAULT, &kerning);
-                int glyph_px_x = (CursorX + kerning.x) >> 6;
-                int glyph_px_y = (CursorY + kerning.y) >> 6;
-                XVG_ASSERT(glyph_px_x >= 0);
+                glyph.x = (CursorX + kerning.x) >> 6;
+                glyph.y = (CursorY + kerning.y) >> 6;
+                XVG_ASSERT(glyph.x >= 0);
 
-                line_xmax = xm_maxi(line_xmax, glyph_px_x + rect.w);
+                line_xmax = xm_maxi(line_xmax, glyph.x + glyph.rect.w + glyph.rect.bearing_x);
 
-                glyphs[layout->num_glyphs++] = (XVGGlyphLayout){.x = glyph_px_x, .y = glyph_px_y, .rect = rect};
+                glyphs[layout->num_glyphs++] = glyph;
             }
-            XVG_ASSERT(rect.advance_x > 0);
+            XVG_ASSERT(glyph.rect.advance_x > 0);
 
-            CursorX        += rect.advance_x;
+            CursorX        += glyph.rect.advance_x;
             prev_glyph_idx  = glyph_idx;
 
             if (cp.i32 == 32) // space
-            {
-                num_glyphs_at_last_space = layout->num_glyphs;
                 CursorX_after_last_space = CursorX;
-            }
 
-            if (CursorX > break_row_x)
+            bool should_break_word = line_xmax > break_row_x_px;
+            if (should_break_word)
             {
                 // Break word
                 XVG_ASSERT(layout->num_rows);
@@ -1939,9 +1936,12 @@ const XVGTextLayout* xvg_create_text_layout(
 
                     end_idx           = prev_row->end_idx;
                     prev_row->end_idx = num_glyphs_at_last_space;
-                    prev_row->xmax    = break_glyph->x + break_glyph->rect.w;
+                    int xmax          = break_glyph->x + break_glyph->rect.w + break_glyph->rect.bearing_x;
+                    xassert(xmax == line_max_at_last_space);
+                    prev_row->xmax = line_max_at_last_space;
 
                     XVG_ASSERT(prev_row->begin_idx <= prev_row->end_idx);
+                    XVG_ASSERT(prev_row->xmax <= break_row_x_px);
                     layout_xmax = xm_maxi(layout_xmax, prev_row->xmax);
                 }
                 current_row->begin_idx = num_glyphs_at_last_space;
@@ -1961,7 +1961,7 @@ const XVGTextLayout* xvg_create_text_layout(
 
                         // recalculate row stats
                         line_ymax = xm_maxi(line_ymax, gp->rect.bearing_y);
-                        line_ymin = xm_mini(line_ymin, gp->rect.bearing_y - rect.h);
+                        line_ymin = xm_mini(line_ymin, gp->rect.bearing_y - glyph.rect.h);
                         line_xmax = xm_maxi(line_xmax, gp->x + gp->rect.w);
                     }
                 }
@@ -1973,8 +1973,9 @@ const XVGTextLayout* xvg_create_text_layout(
 
                 num_glyphs_at_last_space = -1;
                 CursorX_after_last_space = -1;
+                line_max_at_last_space   = 0;
 
-                // This awful looking code helps to skip multiple spaces that may appear at the beginning  of a new line
+                // This awful looking code helps to skip multiple spaces that may appear at the beginning of a new line
                 // A more clever person than I could probably express this better
                 int num_skipped = 0;
                 while (*iter == ' ')
@@ -1999,8 +2000,7 @@ const XVGTextLayout* xvg_create_text_layout(
     layout->total_height_tight = row_0_top - row_n_1_bottom;
 
 #ifndef NDEBUG
-    int64_t break_row_x_px = break_row_x >> 6;
-    int     xmax_2         = 0;
+    int xmax_2 = 0;
     for (int i = 0; i < layout->num_rows; i++)
     {
         const XVGTextLayoutRow* r = rows + i;
@@ -2008,8 +2008,8 @@ const XVGTextLayout* xvg_create_text_layout(
         for (int j = r->begin_idx; j < r->end_idx; j++)
         {
             const XVGGlyphLayout* g  = glyphs + j;
-            int                   gr = g->x + g->rect.w;
-            XVG_ASSERT(gr <= rows[i].xmax);
+            int                   gr = g->x + g->rect.bearing_x;
+            XVG_ASSERT(gr <= r->xmax);
             XVG_ASSERT(gr <= break_row_x_px);
         }
         xmax_2 = xm_maxi(xmax_2, r->xmax);
@@ -2040,14 +2040,6 @@ void xvg_draw_text_layout(
 
     const XVGTextLayoutRow* rows   = xvg_layout_get_rows(layout);
     const XVGGlyphLayout*   glyphs = xvg_layout_get_glyphs(layout);
-
-    int text_px_right = layout->xmax;
-
-    // TODO: handle multi-line centre & right alignmnt
-    if (alignment & XVG_ALIGN_CENTRE_X)
-        x -= (text_px_right / 2);
-    else if (alignment & XVG_ALIGN_RIGHT)
-        x -= text_px_right;
 
     // By taking the ymin/ymax of the entire run of text, we can tightly fit the text vertically to where the user has
     // requested
@@ -2083,13 +2075,21 @@ void xvg_draw_text_layout(
     for (int i = 0; i < layout->num_rows; i++)
     {
         const XVGTextLayoutRow* row = rows + i;
-        // TODO figure out horizontal layout for row
+
+        int row_x_offset = 0;
+
+        if (alignment & XVG_ALIGN_CENTRE_X)
+            row_x_offset = row->xmax / 2;
+        else if (alignment & XVG_ALIGN_RIGHT)
+            row_x_offset = row->xmax;
+
+        int row_x = x - row_x_offset;
+
         for (int j = row->begin_idx; j < row->end_idx; j++)
         {
-
             const XVGGlyphLayout* gpos = &glyphs[j];
 
-            bool did_push = _xvg_push_glyph(xcl, x + gpos->x, y + gpos->y, &gpos->rect, colour);
+            bool did_push = _xvg_push_glyph(xcl, row_x + gpos->x, y + gpos->y, &gpos->rect, colour);
         }
     }
 }
