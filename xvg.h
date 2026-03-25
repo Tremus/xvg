@@ -12,13 +12,6 @@
 // TODO: support colour gradients for text
 // TODO: provide a simple atlas abstraction so users can render icons with something like nanosvg into the atlas
 // TODO: provide functions for clearing atlases. Possibly useful when resizing windows
-// TODO: text decoration: underline & strikethrough
-         It should be possible to estimate a good position for the underline using the glyphs "baseline". Some small% of
-         pixels based on the descender should do it.
-         Strikethough probably works in a similar way. 25% of the ascender from the baseline is likely close to the
-         ideal position for lowercase text
-         Run a few tests with a few fonts and languages (cursive styles, cyrallic, arabic and hebrew) in Chrome or
-         Figma
 // TODO: Try using a "scissor buffer" in the vertex shader to clip rectangles there, instead of through DX11/Metal. This
          will improve batch sizes
 */
@@ -122,6 +115,13 @@ typedef enum XVGAlign
     XVG_ALIGN_BR_TIGHT = (XVG_ALIGN_BOTTOM_TIGHT | XVG_ALIGN_RIGHT),
 } XVGAlign;
 
+typedef enum XVGDecoration
+{
+    XVG_DECORATION_NONE          = 0,
+    XVG_DECORATION_UNDERLINE     = 1 << 0,
+    XVG_DECORATION_STRIKETHROUGH = 1 << 1,
+} XVGDecoration;
+
 typedef struct XVGFontSlot
 {
     void*               kbts_font_ptr;
@@ -195,7 +195,7 @@ typedef struct XVGTextLayoutRow
 // Handling multiple languages is an aftertought here and this design may prove to be bad.
 typedef struct XVGTextLayout
 {
-    // WARNING: this values are scaled accorting to xcl->backingScaleFactor
+    // WARNING: these values are scaled accorting to xcl->backingScaleFactor
     // You are free to use them, however you may need to remember to divide by backingScaleFactor to your work in your
     // own pixel space
     short ascender, descender;
@@ -615,6 +615,7 @@ void xvg_draw_text_ex(
     const char*     text_end,
     unsigned        font_size,
     XVGAlign        alignment,
+    XVGDecoration   decoration,
     uint32_t        colour,
     float           break_width,
     float           line_height);
@@ -630,7 +631,14 @@ static void xvg_release_text_layout(XVGCommandList* xcl, const XVGTextLayout* la
 {
     linked_arena_release(xcl->arena, layout);
 };
-void xvg_draw_text_layout(XVGCommandList* xcl, const XVGTextLayout* layout, int x, int y, int align, uint32_t col);
+void xvg_draw_text_layout(
+    XVGCommandList*      xcl,
+    const XVGTextLayout* layout,
+    int                  x,
+    int                  y,
+    int                  align,
+    XVGDecoration        dec,
+    uint32_t             col);
 
 static unsigned xvg_colour_set_alpha_u8(unsigned col, unsigned char alpha) { return (col & 0xffffff00) | alpha; }
 static unsigned xvg_colour_set_alpha_f32(unsigned col, float alpha)
@@ -1725,7 +1733,7 @@ bool _xvg_push_glyph(XVGCommandList* xcl, int pen_x, int pen_y, const XVGAtlasRe
     return should_push;
 }
 
-XVGTextLayoutRow* _xvg_begin_row(XVG* xcl, XVGTextLayout* layout)
+XVGTextLayoutRow* _xvg_begin_row(XVG* xcl, XVGTextLayout* layout, int cursor_y_px)
 {
     XVG_ASSERT(layout->num_rows <= layout->cap_rows);
     XVGTextLayoutRow* rows = xvg_layout_get_rows(layout);
@@ -1740,11 +1748,11 @@ XVGTextLayoutRow* _xvg_begin_row(XVG* xcl, XVGTextLayout* layout)
         rows = next_rows;
     }
 
-    rows[layout->num_rows++] = (XVGTextLayoutRow){.begin_idx = layout->num_glyphs};
+    rows[layout->num_rows++] = (XVGTextLayoutRow){.begin_idx = layout->num_glyphs, .cursor_y_px = cursor_y_px};
     return rows;
 }
 
-void _xvg_end_row(XVGTextLayout* layout, int ymin, int ymax, int cursor_y_px)
+void _xvg_end_row(XVGTextLayout* layout, int ymin, int ymax)
 {
     // XVG_ASSERT(layout->num_rows > 0);
     if (layout->num_rows > 0)
@@ -1757,11 +1765,10 @@ void _xvg_end_row(XVGTextLayout* layout, int ymin, int ymax, int cursor_y_px)
         if (row->begin_idx != layout->num_glyphs)
         {
             XVG_ASSERT(ymax != 0 || ymin != 0);
-            row->end_idx     = layout->num_glyphs;
-            row->ymin        = ymin;
-            row->ymax        = ymax;
-            row->xmax        = g->x + g->rect.w + g->rect.bearing_x;
-            row->cursor_y_px = cursor_y_px;
+            row->end_idx = layout->num_glyphs;
+            row->ymin    = ymin;
+            row->ymax    = ymax;
+            row->xmax    = g->x + g->rect.w + g->rect.bearing_x;
         }
     }
 }
@@ -1828,7 +1835,7 @@ const XVGTextLayout* xvg_create_text_layout(
     int     line_ymax = 0, line_ymin = 0;
     int     layout_xmax = 0;
 
-    rows                       = _xvg_begin_row(xcl->xvg, layout);
+    rows                       = _xvg_begin_row(xcl->xvg, layout, 0);
     const char* iter           = text_start;
     unsigned    prev_glyph_idx = 0;
 
@@ -1852,8 +1859,7 @@ const XVGTextLayout* xvg_create_text_layout(
         {
             layout_xmax = xm_maxi(layout_xmax, line_xmax);
 
-            _xvg_end_row(layout, line_ymin, line_ymax, CursorY >> 6);
-            rows = _xvg_begin_row(xcl->xvg, layout);
+            _xvg_end_row(layout, line_ymin, line_ymax);
 
             prev_glyph_idx = 0;
             line_xmin      = 0;
@@ -1867,6 +1873,8 @@ const XVGTextLayout* xvg_create_text_layout(
 
             CursorX  = 0;
             CursorY += line_height;
+
+            rows = _xvg_begin_row(xcl->xvg, layout, CursorY >> 6);
             break;
         }
         default:
@@ -1913,11 +1921,15 @@ const XVGTextLayout* xvg_create_text_layout(
             bool should_break_word = line_xmax > break_row_x_px;
             if (should_break_word)
             {
+                CursorX  = CursorX_after_last_space > 0 ? (CursorX - CursorX_after_last_space) : 0;
+                CursorY += line_height;
+                XVG_ASSERT(CursorX >= 0);
+
                 // Break word
                 XVG_ASSERT(layout->num_rows);
                 XVG_ASSERT(num_glyphs_at_last_space <= layout->num_glyphs);
-                _xvg_end_row(layout, line_ymin, line_ymax, (CursorY + line_height) >> 6);
-                rows = _xvg_begin_row(xcl->xvg, layout);
+                _xvg_end_row(layout, line_ymin, line_ymax);
+                rows = _xvg_begin_row(xcl->xvg, layout, CursorY >> 6);
 
                 XVGTextLayoutRow* prev_row    = &rows[layout->num_rows - 2];
                 XVGTextLayoutRow* current_row = &rows[layout->num_rows - 1];
@@ -1953,23 +1965,19 @@ const XVGTextLayout* xvg_create_text_layout(
                     const int offset_x = glyphs[current_row->begin_idx].x;
                     for (int i = current_row->begin_idx; i < layout->num_glyphs; i++)
                     {
-                        XVGGlyphLayout* gp = &glyphs[i];
+                        XVGGlyphLayout* g = &glyphs[i];
                         // Apply offsets to glyphs on new line
-                        gp->x -= offset_x;
-                        gp->y  = (CursorY + line_height) >> 6;
-                        XVG_ASSERT(gp->x >= 0);
+                        g->x -= offset_x;
+                        g->y  = CursorY >> 6;
+                        XVG_ASSERT(g->x >= 0);
 
                         // recalculate row stats
-                        line_ymax = xm_maxi(line_ymax, gp->rect.bearing_y);
-                        line_ymin = xm_mini(line_ymin, gp->rect.bearing_y - glyph.rect.h);
-                        line_xmax = xm_maxi(line_xmax, gp->x + gp->rect.w);
+                        line_ymax = xm_maxi(line_ymax, g->rect.bearing_y);
+                        line_ymin = xm_mini(line_ymin, g->rect.bearing_y - glyph.rect.h);
+                        line_xmax = xm_maxi(line_xmax, g->x + g->rect.w + g->rect.bearing_x);
                     }
                 }
                 layout_xmax = xm_maxi(layout_xmax, line_xmax);
-
-                CursorX  = CursorX_after_last_space > 0 ? (CursorX - CursorX_after_last_space) : 0;
-                CursorY += line_height;
-                XVG_ASSERT(CursorX >= 0);
 
                 num_glyphs_at_last_space = -1;
                 CursorX_after_last_space = -1;
@@ -1991,7 +1999,7 @@ const XVGTextLayout* xvg_create_text_layout(
         }
     }
     layout_xmax = xm_maxi(layout_xmax, line_xmax);
-    _xvg_end_row(layout, line_ymin, line_ymax, CursorY >> 6);
+    _xvg_end_row(layout, line_ymin, line_ymax);
     layout->xmax = layout_xmax;
 
     layout->total_height       = (CursorY + (m->ascender - m->descender)) >> 6;
@@ -2030,13 +2038,11 @@ void xvg_draw_text_layout(
     int                  x,
     int                  y,
     int                  alignment,
+    XVGDecoration        dec,
     uint32_t             colour)
 {
     if (layout->num_glyphs == 0)
         return;
-
-    x *= xcl->xvg->backingScaleFactor;
-    y *= xcl->xvg->backingScaleFactor;
 
     const XVGTextLayoutRow* rows   = xvg_layout_get_rows(layout);
     const XVGGlyphLayout*   glyphs = xvg_layout_get_glyphs(layout);
@@ -2045,32 +2051,36 @@ void xvg_draw_text_layout(
     // requested
     // If we use the ascender/descender metrics from Freetype, then there is always a little bit og padding. The padding
     // actually looks good, but it strips some control from the user
+    int baseline_delta_y = 0;
     if (alignment & XVG_ALIGN_CENTRE_Y)
     {
-        y += (layout->ascender - (layout->total_height / 2));
+        baseline_delta_y = (layout->ascender - (layout->total_height / 2));
     }
     else if (alignment & XVG_ALIGN_TOP)
     {
-        y += layout->ascender;
+        baseline_delta_y = layout->ascender;
     }
     else if (alignment & XVG_ALIGN_BOTTOM)
     {
-        y += (layout->ascender - layout->total_height);
+        baseline_delta_y = (layout->ascender - layout->total_height);
     }
     if (alignment & XVG_ALIGN_CENTRE_Y_TIGHT)
     {
         int half_height_rounded_up  = layout->total_height_tight - (layout->total_height_tight / 2);
-        y                          += rows->ymax - half_height_rounded_up;
+        baseline_delta_y           += rows->ymax - half_height_rounded_up;
     }
     else if (alignment & XVG_ALIGN_TOP_TIGHT)
     {
-        y += rows->ymax;
+        baseline_delta_y = rows->ymax;
     }
     else if (alignment & XVG_ALIGN_BOTTOM_TIGHT)
     {
-        const XVGTextLayoutRow* r  = &rows[layout->num_rows - 1];
-        y                         += r->ymin - r->cursor_y_px;
+        const XVGTextLayoutRow* r = &rows[layout->num_rows - 1];
+        baseline_delta_y          = r->ymin - r->cursor_y_px;
     }
+
+    int text_x = x * xcl->xvg->backingScaleFactor;
+    int text_y = y * xcl->xvg->backingScaleFactor + baseline_delta_y;
 
     for (int i = 0; i < layout->num_rows; i++)
     {
@@ -2083,13 +2093,31 @@ void xvg_draw_text_layout(
         else if (alignment & XVG_ALIGN_RIGHT)
             row_x_offset = row->xmax;
 
-        int row_x = x - row_x_offset;
+        int row_x_left = text_x - row_x_offset;
 
         for (int j = row->begin_idx; j < row->end_idx; j++)
         {
             const XVGGlyphLayout* gpos = &glyphs[j];
 
-            bool did_push = _xvg_push_glyph(xcl, row_x + gpos->x, y + gpos->y, &gpos->rect, colour);
+            bool did_push = _xvg_push_glyph(xcl, row_x_left + gpos->x, text_y + gpos->y, &gpos->rect, colour);
+        }
+
+        if (dec)
+        {
+            int y_baseline = y * xcl->xvg->backingScaleFactor + row->cursor_y_px + baseline_delta_y;
+            // int underline_delta    = (int)((float)layout->descender * -0.25f);
+            // int strikethough_delta = (int)((float)layout->ascender * -0.25f);
+            int underline_delta    = (abs(layout->descender) >> 2);
+            int strikethough_delta = (abs(layout->ascender) >> 2);
+            int thicc              = 1; // TODO: increase thickness based on font size?
+
+            bool should_draw_underline     = !!(dec & XVG_DECORATION_UNDERLINE);
+            bool should_draw_strikethorugh = !!(dec & XVG_DECORATION_STRIKETHROUGH);
+
+            if (should_draw_underline)
+                xvg_draw_solid_rectangle(xcl, row_x_left, y_baseline + underline_delta, row->xmax, thicc, colour);
+            if (should_draw_strikethorugh)
+                xvg_draw_solid_rectangle(xcl, row_x_left, y_baseline - strikethough_delta, row->xmax, thicc, colour);
         }
     }
 }
@@ -2102,6 +2130,7 @@ void xvg_draw_text_ex(
     const char*     text_end,
     unsigned        font_size,
     XVGAlign        alignment,
+    XVGDecoration   decoration,
     uint32_t        colour,
     float           break_width,
     float           line_height)
@@ -2110,7 +2139,7 @@ void xvg_draw_text_ex(
 
     const XVGTextLayout* layout =
         xvg_create_text_layout(xcl, text_start, text_end, font_size, break_width, line_height);
-    xvg_draw_text_layout(xcl, layout, x, y, alignment, colour);
+    xvg_draw_text_layout(xcl, layout, x, y, alignment, decoration, colour);
     xvg_release_text_layout(xcl, layout);
 
     LINKED_ARENA_LEAK_DETECT_END(xcl->arena);
@@ -2126,7 +2155,7 @@ void xvg_draw_text(
     XVGAlign        alignment,
     uint32_t        colour)
 {
-    xvg_draw_text_ex(xcl, x, y, text_start, text_end, font_size, alignment, colour, 0, 1);
+    xvg_draw_text_ex(xcl, x, y, text_start, text_end, font_size, alignment, 0, colour, 0, 1);
 }
 
 void xvg_init(XVG* xcl)
