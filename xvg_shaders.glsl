@@ -767,7 +767,7 @@ void main() {
     // vec3 pixel_coverages = texture(sampler2D(fs_xvg_text_tex, fs_xvg_text_smp), texcoord).rgb;
 
     // NOTE: if we start text_idx from 1, then its really obvious when we haven't initialised it
-    vec4 pixel_coverages;
+    vec4 pixel_coverages = vec4(0);
     if (atlas_idx == 1)
         pixel_coverages = texelFetch(sampler2D(fs_xvg_text_atlas1, fs_xvg_text_smp), itexcoord, 0);
     if (atlas_idx == 2)
