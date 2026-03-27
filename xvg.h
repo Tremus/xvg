@@ -14,6 +14,10 @@
 // TODO: provide functions for clearing atlases. Possibly useful when resizing windows
 // TODO: Try using a "scissor buffer" in the vertex shader to clip rectangles there, instead of through DX11/Metal. This
          will improve batch sizes
+// TODO: sometimes horizontally centred text looks "off by one". This may have something to do with the "bearing"
+         property of glyphs
+         Factor in bearing with an "xmin" property in rows, and use xmax-xmin to calculate the horizontal offsets
+         when placing glyphs
 */
 
 // #ifdef __cplusplus
@@ -1396,14 +1400,14 @@ void xvg_draw_line_plot(
             dst[i].y     = a;
             dst[i + 1].y = (a + b) * 0.5;
         }
-        xassert(begin_idx + i == end_idx - 2);
-        xassert(j == width - 1);
+        XVG_ASSERT(begin_idx + i == end_idx - 2);
+        XVG_ASSERT(j == width - 1);
         dst[i].y     = data[j];
         dst[i + 1].y = data[j];
     }
     else
     {
-        xassert(backingScaleFactor == 1);
+        XVG_ASSERT(backingScaleFactor == 1);
         xstatic_assert(sizeof(xcl->line_segments[0]) == sizeof(data[0]), "Must match");
         memcpy(xcl->line_segments + begin_idx, data, N * sizeof(xcl->line_segments[0]));
     }
@@ -1949,7 +1953,7 @@ const XVGTextLayout* xvg_create_text_layout(
                     end_idx           = prev_row->end_idx;
                     prev_row->end_idx = num_glyphs_at_last_space;
                     int xmax          = break_glyph->x + break_glyph->rect.w + break_glyph->rect.bearing_x;
-                    xassert(xmax == line_max_at_last_space);
+                    XVG_ASSERT(xmax == line_max_at_last_space);
                     prev_row->xmax = line_max_at_last_space;
 
                     XVG_ASSERT(prev_row->begin_idx <= prev_row->end_idx);
