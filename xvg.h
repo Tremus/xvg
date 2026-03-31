@@ -60,6 +60,7 @@ typedef enum XVGShapeType
     XVG_SHAPE_ARC_BUTT_STROKE,
     XVG_SHAPE_LINE_ROUND, // TODO: butt?
     XVG_SHAPE_LINE_PLOT,
+    XVG_SHAPE_LINE_PLOT_BG,
 } XVGShapeType;
 
 typedef enum XVGColourType
@@ -595,6 +596,24 @@ void xvg_draw_line_plot_with_gradient(
     const float*    data,
     float           br,
     float           stroke_px,
+    XVGGradient     grad);
+void xvg_draw_line_plot_background(
+    XVGCommandList* xcl,
+    int             x,
+    int             y,
+    int             w,
+    int             h,
+    const float*    data,
+    float           br,
+    uint32_t        col);
+void xvg_draw_line_plot_background_with_gradient(
+    XVGCommandList* xcl,
+    int             x,
+    int             y,
+    int             w,
+    int             h,
+    const float*    data,
+    float           br,
     XVGGradient     grad);
 
 // FONTS
@@ -1370,7 +1389,7 @@ void xvg_draw_line_round(XVGCommandList* xcl, float x0, float y0, float x1, floa
     xvg_draw_line_round_with_gradient(xcl, x0, y0, x1, y1, stroke_width, grad);
 }
 
-void xvg_draw_line_plot_with_gradient(
+void _xvg_draw_line_plot_with_gradient_impl(
     XVGCommandList* xcl,
     int             x,
     int             y,
@@ -1379,7 +1398,8 @@ void xvg_draw_line_plot_with_gradient(
     const float*    data,
     float           crop_br,
     float           stroke_width,
-    XVGGradient     grad)
+    XVGGradient     grad,
+    XVGShapeType    shape_type)
 {
     size_t    remaining_capacity = XVG_ARRLEN(xcl->line_segments) - xcl->frame.num_line_segments;
     const int backingScaleFactor = xcl->xvg->backingScaleFactor;
@@ -1432,7 +1452,7 @@ void xvg_draw_line_plot_with_gradient(
     *shape             = (xvg_shape_t){
                     .topleft             = {x, y - stroke_width * 0.25f},
                     .bottomright         = {x + width, y + height + stroke_width * 0.25},
-                    .sdf_data            = _xvg_compress_sdf_data(tex_idx, XVG_SHAPE_LINE_PLOT, grad.type, feather, stroke_width),
+                    .sdf_data            = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, feather, stroke_width),
                     .borderradius_arcpie = _xvg_compress_border_radius(crop_br, crop_br, crop_br, crop_br),
                     .buffer_idx_range    = line_buffer_range,
 
@@ -1448,6 +1468,20 @@ void xvg_draw_line_plot_with_gradient(
     XVG_ASSERT(xcl->frame.num_line_segments <= XVG_ARRLEN(xcl->line_segments));
 }
 
+void xvg_draw_line_plot_with_gradient(
+    XVGCommandList* xcl,
+    int             x,
+    int             y,
+    int             w,
+    int             h,
+    const float*    data,
+    float           crop_br,
+    float           stroke_width,
+    XVGGradient     grad)
+{
+    _xvg_draw_line_plot_with_gradient_impl(xcl, x, y, w, h, data, crop_br, stroke_width, grad, XVG_SHAPE_LINE_PLOT);
+}
+
 void xvg_draw_line_plot(
     XVGCommandList* xcl,
     int             x,
@@ -1460,7 +1494,34 @@ void xvg_draw_line_plot(
     uint32_t        colour)
 {
     XVGGradient grad = {.colour1 = colour};
-    xvg_draw_line_plot_with_gradient(xcl, x, y, w, h, data, crop_br, stroke_width, grad);
+    _xvg_draw_line_plot_with_gradient_impl(xcl, x, y, w, h, data, crop_br, stroke_width, grad, XVG_SHAPE_LINE_PLOT);
+}
+
+void xvg_draw_line_plot_background_with_gradient(
+    XVGCommandList* xcl,
+    int             x,
+    int             y,
+    int             w,
+    int             h,
+    const float*    data,
+    float           crop_br,
+    XVGGradient     grad)
+{
+    _xvg_draw_line_plot_with_gradient_impl(xcl, x, y, w, h, data, crop_br, 0, grad, XVG_SHAPE_LINE_PLOT_BG);
+}
+
+void xvg_draw_line_plot_background(
+    XVGCommandList* xcl,
+    int             x,
+    int             y,
+    int             w,
+    int             h,
+    const float*    data,
+    float           crop_br,
+    uint32_t        colour)
+{
+    XVGGradient grad = {.colour1 = colour};
+    _xvg_draw_line_plot_with_gradient_impl(xcl, x, y, w, h, data, crop_br, 0, grad, XVG_SHAPE_LINE_PLOT_BG);
 }
 
 XVGFontSlot* _xvg_get_current_font_slot(XVG* xcl) { return &xcl->fonts[xcl->current_font_idx]; }

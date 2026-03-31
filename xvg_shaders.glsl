@@ -99,6 +99,7 @@ out flat uint colour2;
 #define XVG_SHAPE_ARC_BUTT_STROKE  10
 #define XVG_SHAPE_LINE_ROUND       11
 #define XVG_SHAPE_LINE_PLOT        12
+#define XVG_SHAPE_LINE_PLOT_BG     13
 
 #define XVG_COLOUR_SOLID           0
 #define XVG_COLOUR_LINEAR_GRADIENT 1
@@ -154,19 +155,22 @@ void main() {
     float stroke_width_px =      sdf_data.w * 16;
     stroke_width = px_scale * 2 * stroke_width_px / vw;
 
-    if (sdf_type == XVG_SHAPE_RECTANGLE_FILL ||
-        sdf_type == XVG_SHAPE_RECTANGLE_STROKE ||
-        sdf_type == XVG_SHAPE_LINE_PLOT)
+    if (sdf_type == XVG_SHAPE_RECTANGLE_FILL
+    ||  sdf_type == XVG_SHAPE_RECTANGLE_STROKE
+    ||  sdf_type == XVG_SHAPE_LINE_PLOT
+    ||  sdf_type == XVG_SHAPE_LINE_PLOT_BG
+        )
     {
         borderradius_arcpie = (unpackUnorm4x8(vert.borderradius_arcpie) * 255) / vec4(vh * 0.5);        
     }
 
-    if (sdf_type == XVG_SHAPE_TRIANGLE_FILL    ||
-        sdf_type == XVG_SHAPE_TRIANGLE_STROKE  ||
-        sdf_type == XVG_SHAPE_PIE_FILL         ||
-        sdf_type == XVG_SHAPE_PIE_STROKE       ||
-        sdf_type == XVG_SHAPE_ARC_ROUND_STROKE ||
-        sdf_type == XVG_SHAPE_ARC_BUTT_STROKE)
+    if (sdf_type == XVG_SHAPE_TRIANGLE_FILL
+    ||  sdf_type == XVG_SHAPE_TRIANGLE_STROKE
+    ||  sdf_type == XVG_SHAPE_PIE_FILL
+    ||  sdf_type == XVG_SHAPE_PIE_STROKE
+    ||  sdf_type == XVG_SHAPE_ARC_ROUND_STROKE
+    ||  sdf_type == XVG_SHAPE_ARC_BUTT_STROKE
+    )
     {
         vec2 arcpie   = 2 * PI * unpackUnorm2x16(vert.borderradius_arcpie);
         borderradius_arcpie.xy = vec2(cos(arcpie.x), sin(arcpie.x));
@@ -193,7 +197,9 @@ void main() {
         borderradius_arcpie.yw = -borderradius_arcpie.yw;
     }
 
-    if (sdf_type == XVG_SHAPE_LINE_PLOT)
+    if (sdf_type == XVG_SHAPE_LINE_PLOT
+    ||  sdf_type == XVG_SHAPE_LINE_PLOT_BG
+    )
     {
         vec2 range = unpackUnorm2x16(vert.buffer_idx_range) * vec2(65535);
 
@@ -294,6 +300,7 @@ out vec4 frag_color;
 #define XVG_SHAPE_ARC_BUTT_STROKE  10
 #define XVG_SHAPE_LINE_ROUND       11
 #define XVG_SHAPE_LINE_PLOT        12
+#define XVG_SHAPE_LINE_PLOT_BG     13
 
 #define XVG_COLOUR_SOLID  0
 #define XVG_COLOUR_LINEAR_GRADIENT 1
@@ -516,6 +523,17 @@ void main()
 
         shape *= crop_shape;
     }
+    if (sdf_type == XVG_SHAPE_LINE_PLOT_BG)
+    {
+        vec2 range = unpackUnorm2x16(buffer_idx_range) * vec2(65535);
+        float buffer_idx = mix(range.x, range.y, p.x * 0.5 + 0.5);
+        float idx      = min(buffer_idx,     range.y - 1);
+        float line_y      = line_buffer[int(idx)].y;
+
+        float uv_y = p.y * 0.5 + 0.5;
+        shape = uv_y < abs(line_y) ? 1.0 : 0.0;
+    }
+
 
     float t = 0;
     if (grad_type == XVG_COLOUR_LINEAR_GRADIENT)
