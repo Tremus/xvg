@@ -586,6 +586,16 @@ void xvg_draw_line_plot(
     float           br,
     float           stroke_px,
     uint32_t        col);
+void xvg_draw_line_plot_with_gradient(
+    XVGCommandList* xcl,
+    int             x,
+    int             y,
+    int             w,
+    int             h,
+    const float*    data,
+    float           br,
+    float           stroke_px,
+    XVGGradient     grad);
 
 // FONTS
 // These functions return font IDs. 0 is considered to be invalid
@@ -1360,7 +1370,7 @@ void xvg_draw_line_round(XVGCommandList* xcl, float x0, float y0, float x1, floa
     xvg_draw_line_round_with_gradient(xcl, x0, y0, x1, y1, stroke_width, grad);
 }
 
-void xvg_draw_line_plot(
+void xvg_draw_line_plot_with_gradient(
     XVGCommandList* xcl,
     int             x,
     int             y,
@@ -1369,7 +1379,7 @@ void xvg_draw_line_plot(
     const float*    data,
     float           crop_br,
     float           stroke_width,
-    uint32_t        colour)
+    XVGGradient     grad)
 {
     size_t    remaining_capacity = XVG_ARRLEN(xcl->line_segments) - xcl->frame.num_line_segments;
     const int backingScaleFactor = xcl->xvg->backingScaleFactor;
@@ -1416,19 +1426,41 @@ void xvg_draw_line_plot(
     float feather = 4.0f / height;
 
     uint32_t line_buffer_range = (uint32_t)begin_idx | (end_idx << 16);
+    unsigned tex_idx           = _xvg_set_bound_texture(xcl, &grad);
 
     xvg_shape_t* shape = _xvg_get_shape(xcl);
     *shape             = (xvg_shape_t){
                     .topleft             = {x, y - stroke_width * 0.25f},
                     .bottomright         = {x + width, y + height + stroke_width * 0.25},
-                    .sdf_data            = _xvg_compress_sdf_data(0, XVG_SHAPE_LINE_PLOT, 0, feather, stroke_width),
+                    .sdf_data            = _xvg_compress_sdf_data(tex_idx, XVG_SHAPE_LINE_PLOT, grad.type, feather, stroke_width),
                     .borderradius_arcpie = _xvg_compress_border_radius(crop_br, crop_br, crop_br, crop_br),
-                    .colour1             = colour,
                     .buffer_idx_range    = line_buffer_range,
+
+                    .colour1      = grad.colour1,
+                    .colour2      = grad.colour2,
+                    .gradient_a   = {grad.gradient_a[0], grad.gradient_a[1]},
+                    .gradient_b   = {grad.gradient_b[0], grad.gradient_b[1]},
+                    .texcoords_xy = grad.xy,
+                    .texcoords_wh = grad.wh,
     };
 
     xcl->frame.num_line_segments = end_idx;
     XVG_ASSERT(xcl->frame.num_line_segments <= XVG_ARRLEN(xcl->line_segments));
+}
+
+void xvg_draw_line_plot(
+    XVGCommandList* xcl,
+    int             x,
+    int             y,
+    int             w,
+    int             h,
+    const float*    data,
+    float           crop_br,
+    float           stroke_width,
+    uint32_t        colour)
+{
+    XVGGradient grad = {.colour1 = colour};
+    xvg_draw_line_plot_with_gradient(xcl, x, y, w, h, data, crop_br, stroke_width, grad);
 }
 
 XVGFontSlot* _xvg_get_current_font_slot(XVG* xcl) { return &xcl->fonts[xcl->current_font_idx]; }
