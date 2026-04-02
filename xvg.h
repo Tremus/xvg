@@ -572,12 +572,23 @@ void xvg_draw_line_round_with_gradient(
     XVGGradient     grad);
 void xvg_draw_line_round(XVGCommandList* xcl, float x0, float y0, float x1, float y1, float stroke_width, unsigned col);
 
+// Useful for reusing line data used by other plots
+typedef union XVGBufferRange
+{
+    uint32_t u32;
+    struct
+    {
+        uint16_t begin_idx;
+        uint16_t end_idx;
+    };
+} XVGBufferRange;
+
 // 'data' is expected to be an array of 'width' length
 // 'data' is expected to contain normalised values where 0 == (y + height), and 1 == y
 // 'data' is allowed to go beyond [0-1], it will just get cropped
 // 'stroke_px' is limited to the range [1-2]
 // 'br' crops the line at the corners of the rectangle you're drawing
-void xvg_draw_line_plot(
+XVGBufferRange xvg_draw_line_plot(
     XVGCommandList* xcl,
     int             x,
     int             y,
@@ -587,7 +598,7 @@ void xvg_draw_line_plot(
     float           br,
     float           stroke_px,
     uint32_t        col);
-void xvg_draw_line_plot_with_gradient(
+XVGBufferRange xvg_draw_line_plot_with_gradient(
     XVGCommandList* xcl,
     int             x,
     int             y,
@@ -597,7 +608,7 @@ void xvg_draw_line_plot_with_gradient(
     float           br,
     float           stroke_px,
     XVGGradient     grad);
-void xvg_draw_line_plot_background(
+XVGBufferRange xvg_draw_line_plot_background(
     XVGCommandList* xcl,
     int             x,
     int             y,
@@ -606,7 +617,7 @@ void xvg_draw_line_plot_background(
     const float*    data,
     float           br,
     uint32_t        col);
-void xvg_draw_line_plot_background_with_gradient(
+XVGBufferRange xvg_draw_line_plot_background_with_gradient(
     XVGCommandList* xcl,
     int             x,
     int             y,
@@ -615,6 +626,19 @@ void xvg_draw_line_plot_background_with_gradient(
     const float*    data,
     float           br,
     XVGGradient     grad);
+
+// Lower level API used for reusing existing parts of the line buffer
+void _xvg_draw_line_plot_ex(
+    XVGCommandList* xcl,
+    int             x,
+    int             y,
+    int             width,
+    int             height,
+    float           crop_br,
+    float           stroke_width,
+    XVGGradient     grad,
+    XVGShapeType    shape_type,
+    XVGBufferRange  range);
 
 // FONTS
 // These functions return font IDs. 0 is considered to be invalid
@@ -1389,7 +1413,92 @@ void xvg_draw_line_round(XVGCommandList* xcl, float x0, float y0, float x1, floa
     xvg_draw_line_round_with_gradient(xcl, x0, y0, x1, y1, stroke_width, grad);
 }
 
-void _xvg_draw_line_plot_with_gradient_impl(
+XVGBufferRange _xvg_add_line(XVGCommandList* xcl, const float* data, int len)
+{
+    XVGBufferRange range;
+    range.begin_idx = range.end_idx = xcl->frame.num_line_segments;
+
+    size_t    remaining_capacity = XVG_ARRLEN(xcl->line_segments) - xcl->frame.num_line_segments;
+    const int backingScaleFactor = xcl->xvg->backingScaleFactor;
+
+    int N = len * backingScaleFactor;
+
+    if (N > remaining_capacity)
+        N = 0;
+
+    XVG_ASSERT(N > 0);
+    if (N <= 0)
+        return range;
+
+    range.end_idx += N;
+
+    if (backingScaleFactor == 2)
+    {
+        // Plain old linear interpolation
+        xvg_line_segment_t* dst      = xcl->line_segments + range.begin_idx;
+        int                 work_len = N - 2;
+        int                 i, j;
+
+        for (i = 0, j = 0; i < work_len; i += 2, j++)
+        {
+            float a      = data[j];
+            float b      = data[j + 1];
+            dst[i].y     = a;
+            dst[i + 1].y = (a + b) * 0.5;
+        }
+        XVG_ASSERT(range.begin_idx + i == range.end_idx - 2);
+        XVG_ASSERT(j == len - 1);
+        dst[i].y     = data[j];
+        dst[i + 1].y = data[j];
+    }
+    else
+    {
+        XVG_ASSERT(backingScaleFactor == 1);
+        xstatic_assert(sizeof(xcl->line_segments[0]) == sizeof(data[0]), "Must match");
+        memcpy(xcl->line_segments + range.begin_idx, data, N * sizeof(xcl->line_segments[0]));
+    }
+
+    xcl->frame.num_line_segments += N;
+
+    XVG_ASSERT(xcl->frame.num_line_segments <= XVG_ARRLEN(xcl->line_segments));
+
+    return range;
+}
+
+void _xvg_draw_line_plot_ex(
+    XVGCommandList* xcl,
+    int             x,
+    int             y,
+    int             width,
+    int             height,
+    float           crop_br,
+    float           stroke_width,
+    XVGGradient     grad,
+    XVGShapeType    shape_type,
+    XVGBufferRange  range)
+{
+    float feather = 4.0f / height;
+
+    unsigned tex_idx = _xvg_set_bound_texture(xcl, &grad);
+
+    xvg_shape_t* shape = _xvg_get_shape(xcl);
+    *shape             = (xvg_shape_t){
+                    .topleft             = {x, y - stroke_width * 0.25f},
+                    .bottomright         = {x + width, y + height + stroke_width * 0.25},
+                    .sdf_data            = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, feather, stroke_width),
+                    .borderradius_arcpie = _xvg_compress_border_radius(crop_br, crop_br, crop_br, crop_br),
+                    .buffer_idx_range    = range.u32,
+
+                    .colour1      = grad.colour1,
+                    .colour2      = grad.colour2,
+                    .gradient_a   = {grad.gradient_a[0], grad.gradient_a[1]},
+                    .gradient_b   = {grad.gradient_b[0], grad.gradient_b[1]},
+                    .texcoords_xy = grad.xy,
+                    .texcoords_wh = grad.wh,
+    };
+}
+
+XVGBufferRange _xvg_draw_line_plot_with_gradient_impl(
     XVGCommandList* xcl,
     int             x,
     int             y,
@@ -1401,103 +1510,33 @@ void _xvg_draw_line_plot_with_gradient_impl(
     XVGGradient     grad,
     XVGShapeType    shape_type)
 {
-    size_t    remaining_capacity = XVG_ARRLEN(xcl->line_segments) - xcl->frame.num_line_segments;
-    const int backingScaleFactor = xcl->xvg->backingScaleFactor;
-
-    int N = width * backingScaleFactor;
-
-    if (N > remaining_capacity)
-        N = 0;
-
-    XVG_ASSERT(N > 0);
-    if (N <= 0)
-        return;
-
-    const uint32_t begin_idx = xcl->frame.num_line_segments;
-    const uint32_t end_idx   = xcl->frame.num_line_segments + N;
-
-    if (backingScaleFactor == 2)
-    {
-        // Plain old linear interpolation
-        xvg_line_segment_t* dst      = xcl->line_segments + begin_idx;
-        int                 work_len = N - 2;
-        int                 i, j;
-
-        for (i = 0, j = 0; i < work_len; i += 2, j++)
-        {
-            float a      = data[j];
-            float b      = data[j + 1];
-            dst[i].y     = a;
-            dst[i + 1].y = (a + b) * 0.5;
-        }
-        XVG_ASSERT(begin_idx + i == end_idx - 2);
-        XVG_ASSERT(j == width - 1);
-        dst[i].y     = data[j];
-        dst[i + 1].y = data[j];
-    }
-    else
-    {
-        XVG_ASSERT(backingScaleFactor == 1);
-        xstatic_assert(sizeof(xcl->line_segments[0]) == sizeof(data[0]), "Must match");
-        memcpy(xcl->line_segments + begin_idx, data, N * sizeof(xcl->line_segments[0]));
-    }
-
-    XVG_ASSERT(end_idx >= 1);
-    float feather = 4.0f / height;
-
-    uint32_t line_buffer_range = (uint32_t)begin_idx | (end_idx << 16);
-    unsigned tex_idx           = _xvg_set_bound_texture(xcl, &grad);
-
-    xvg_shape_t* shape = _xvg_get_shape(xcl);
-    *shape             = (xvg_shape_t){
-                    .topleft             = {x, y - stroke_width * 0.25f},
-                    .bottomright         = {x + width, y + height + stroke_width * 0.25},
-                    .sdf_data            = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, feather, stroke_width),
-                    .borderradius_arcpie = _xvg_compress_border_radius(crop_br, crop_br, crop_br, crop_br),
-                    .buffer_idx_range    = line_buffer_range,
-
-                    .colour1      = grad.colour1,
-                    .colour2      = grad.colour2,
-                    .gradient_a   = {grad.gradient_a[0], grad.gradient_a[1]},
-                    .gradient_b   = {grad.gradient_b[0], grad.gradient_b[1]},
-                    .texcoords_xy = grad.xy,
-                    .texcoords_wh = grad.wh,
-    };
-
-    xcl->frame.num_line_segments = end_idx;
-    XVG_ASSERT(xcl->frame.num_line_segments <= XVG_ARRLEN(xcl->line_segments));
+    XVGBufferRange range = _xvg_add_line(xcl, data, width);
+    _xvg_draw_line_plot_ex(xcl, x, y, width, height, crop_br, stroke_width, grad, shape_type, range);
+    return range;
 }
 
-void xvg_draw_line_plot_with_gradient(
+XVGBufferRange xvg_draw_line_plot_with_gradient(
     XVGCommandList* xcl,
     int             x,
     int             y,
     int             w,
     int             h,
     const float*    data,
-    float           crop_br,
-    float           stroke_width,
-    XVGGradient     grad)
+    float           br,
+    float           sw,
+    XVGGradient     g)
 {
-    _xvg_draw_line_plot_with_gradient_impl(xcl, x, y, w, h, data, crop_br, stroke_width, grad, XVG_SHAPE_LINE_PLOT);
+    return _xvg_draw_line_plot_with_gradient_impl(xcl, x, y, w, h, data, br, sw, g, XVG_SHAPE_LINE_PLOT);
 }
 
-void xvg_draw_line_plot(
-    XVGCommandList* xcl,
-    int             x,
-    int             y,
-    int             w,
-    int             h,
-    const float*    data,
-    float           crop_br,
-    float           stroke_width,
-    uint32_t        colour)
+XVGBufferRange
+xvg_draw_line_plot(XVGCommandList* xcl, int x, int y, int w, int h, const float* data, float br, float sw, uint32_t col)
 {
-    XVGGradient grad = {.colour1 = colour};
-    _xvg_draw_line_plot_with_gradient_impl(xcl, x, y, w, h, data, crop_br, stroke_width, grad, XVG_SHAPE_LINE_PLOT);
+    XVGGradient grad = {.colour1 = col};
+    return _xvg_draw_line_plot_with_gradient_impl(xcl, x, y, w, h, data, br, sw, grad, XVG_SHAPE_LINE_PLOT);
 }
 
-void xvg_draw_line_plot_background_with_gradient(
+XVGBufferRange xvg_draw_line_plot_background_with_gradient(
     XVGCommandList* xcl,
     int             x,
     int             y,
@@ -1507,10 +1546,10 @@ void xvg_draw_line_plot_background_with_gradient(
     float           crop_br,
     XVGGradient     grad)
 {
-    _xvg_draw_line_plot_with_gradient_impl(xcl, x, y, w, h, data, crop_br, 0, grad, XVG_SHAPE_LINE_PLOT_BG);
+    return _xvg_draw_line_plot_with_gradient_impl(xcl, x, y, w, h, data, crop_br, 0, grad, XVG_SHAPE_LINE_PLOT_BG);
 }
 
-void xvg_draw_line_plot_background(
+XVGBufferRange xvg_draw_line_plot_background(
     XVGCommandList* xcl,
     int             x,
     int             y,
@@ -1521,7 +1560,7 @@ void xvg_draw_line_plot_background(
     uint32_t        colour)
 {
     XVGGradient grad = {.colour1 = colour};
-    _xvg_draw_line_plot_with_gradient_impl(xcl, x, y, w, h, data, crop_br, 0, grad, XVG_SHAPE_LINE_PLOT_BG);
+    return _xvg_draw_line_plot_with_gradient_impl(xcl, x, y, w, h, data, crop_br, 0, grad, XVG_SHAPE_LINE_PLOT_BG);
 }
 
 XVGFontSlot* _xvg_get_current_font_slot(XVG* xcl) { return &xcl->fonts[xcl->current_font_idx]; }
