@@ -2192,6 +2192,8 @@ void xvg_draw_text_layout(
     if (layout->num_glyphs == 0)
         return;
 
+    const int backingScaleFactor = xcl->xvg->backingScaleFactor;
+
     const XVGTextLayoutRow* rows   = xvg_layout_get_rows(layout);
     const XVGGlyphLayout*   glyphs = xvg_layout_get_glyphs(layout);
 
@@ -2227,8 +2229,8 @@ void xvg_draw_text_layout(
         baseline_delta_y          = r->ymin - r->cursor_y_px;
     }
 
-    int text_x = x * xcl->xvg->backingScaleFactor;
-    int text_y = y * xcl->xvg->backingScaleFactor + baseline_delta_y;
+    int text_x = x * backingScaleFactor;
+    int text_y = y * backingScaleFactor + baseline_delta_y;
 
     for (int i = 0; i < layout->num_rows; i++)
     {
@@ -2252,12 +2254,15 @@ void xvg_draw_text_layout(
 
         if (dec)
         {
-            int y_baseline = y * xcl->xvg->backingScaleFactor + row->cursor_y_px + baseline_delta_y;
-            // int underline_delta    = (int)((float)layout->descender * -0.25f);
-            // int strikethough_delta = (int)((float)layout->ascender * -0.25f);
+            int y_baseline         = y * backingScaleFactor + row->cursor_y_px + baseline_delta_y;
             int underline_delta    = (abs(layout->descender) >> 2);
             int strikethough_delta = (abs(layout->ascender) >> 2);
             int thicc              = 1; // TODO: increase thickness based on font size?
+
+            int x_dec           = row_x_left / backingScaleFactor;
+            int w_dec           = row->xmax / backingScaleFactor;
+            int y_underline     = (y_baseline + underline_delta) / backingScaleFactor;
+            int y_strikethrough = (y_baseline - strikethough_delta) / backingScaleFactor;
 
             bool should_draw_underline     = !!(dec & XVG_DECORATION_UNDERLINE);
             bool should_draw_strikethorugh = !!(dec & XVG_DECORATION_STRIKETHROUGH);
@@ -2265,9 +2270,9 @@ void xvg_draw_text_layout(
             // TODO: draw underline in segments, leaving gaps between glyphs that descend below the baseline.
             //       eg. lowercase 'g' and 'y'
             if (should_draw_underline)
-                xvg_draw_solid_rectangle(xcl, row_x_left, y_baseline + underline_delta, row->xmax, thicc, colour);
+                xvg_draw_solid_rectangle(xcl, x_dec, y_underline, w_dec, thicc, colour);
             if (should_draw_strikethorugh)
-                xvg_draw_solid_rectangle(xcl, row_x_left, y_baseline - strikethough_delta, row->xmax, thicc, colour);
+                xvg_draw_solid_rectangle(xcl, x_dec, y_strikethrough, w_dec, thicc, colour);
         }
     }
 }
