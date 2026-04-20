@@ -327,6 +327,35 @@ typedef struct XVGCommand
     int next_idx;
 } XVGCommand;
 
+typedef struct xvg_shape2_t
+{
+    float topleft[2];
+    float bottomright[2]; // 0-15
+
+    uint32_t sdf_data;
+    uint32_t borderradius_arcpie;
+    uint32_t colour1;
+    uint32_t colour2; // 16-31
+
+    float gradient_a[2];
+    float gradient_b[2]; // 32-47
+
+    uint32_t buffer_idx_range;
+    uint32_t _padding; // unused
+    uint32_t texcoords_xy;
+    uint32_t texcoords_wh; // 48-63
+} xvg_shape2_t;
+_Static_assert((sizeof(xvg_shape2_t) & 15) == 0, "Must be 16 byte aligned");
+
+typedef struct xvg_text2_t
+{
+    uint32_t topleft;
+    uint32_t atlas_coords;
+    uint32_t atlas_idx;
+    uint32_t colour;
+} xvg_text2_t;
+_Static_assert((sizeof(xvg_text2_t) & 15) == 0, "Must be 16 byte aligned");
+
 typedef struct XVGCommandList
 {
     XVG*         xvg;   // not owned
@@ -334,6 +363,9 @@ typedef struct XVGCommandList
 
     sg_buffer shapes_sbo;
     sg_view   shapes_sbv;
+
+    // sg_image shapes_img;
+    // sg_view  shapes_img_view;
 
     sg_view   lines_sbv;
     sg_buffer lines_sbo; // normalised y values
@@ -374,7 +406,7 @@ typedef struct XVGCommandList
     XVGCommand commands[XVG_COMMANDS_CAPACITY];
     sg_pass    passes[XVG_PASS_CAPACITY];
 
-    xvg_shape_t        shapes[XVG_SHAPES_CAPACITY];
+    xvg_shape2_t       shapes[XVG_SHAPES_CAPACITY];
     xvg_line_segment_t line_segments[XVG_LINE_SEGMENTS_CAPACITY];
     xvg_text_t         text[XVG_TEXT_CAPACITY];
 } XVGCommandList;
@@ -955,13 +987,13 @@ void xvg_command_list_join(XVGCommandList* xcl, XVGCommandListRange* range)
 // ███████║██║  ██║██║  ██║██║     ███████╗███████║
 // ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚══════╝╚══════╝
 
-xvg_shape_t* _xvg_get_shape(XVGCommandList* xcl)
+xvg_shape2_t* _xvg_get_shape(XVGCommandList* xcl)
 {
     // Branchless
-    static xvg_shape_t stub;
+    static xvg_shape2_t stub;
 
     XVG_ASSERT(xcl->frame.num_shapes < XVG_ARRLEN(xcl->shapes));
-    xvg_shape_t* ret = xcl->frame.num_shapes < XVG_ARRLEN(xcl->shapes) ? &xcl->shapes[xcl->frame.num_shapes] : &stub;
+    xvg_shape2_t* ret = xcl->frame.num_shapes < XVG_ARRLEN(xcl->shapes) ? &xcl->shapes[xcl->frame.num_shapes] : &stub;
 
     xcl->frame.num_shapes++;
     return ret;
@@ -1111,17 +1143,17 @@ void xvg_draw_circle_with_gradient(
     XVGShapeType shape_type = stroke_width > 0 ? XVG_SHAPE_CIRCLE_STROKE : XVG_SHAPE_CIRCLE_FILL;
     float        feather    = 2.0f / radius_px;
 
-    xvg_shape_t* shape = _xvg_get_shape(xcl);
-    *shape             = (xvg_shape_t){
-                    .topleft      = {cx - radius_px, cy - radius_px},
-                    .bottomright  = {cx + radius_px, cy + radius_px},
-                    .sdf_data     = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, feather, stroke_width),
-                    .colour1      = grad.colour1,
-                    .colour2      = grad.colour2,
-                    .gradient_a   = {grad.gradient_a[0], grad.gradient_a[1]},
-                    .gradient_b   = {grad.gradient_b[0], grad.gradient_b[1]},
-                    .texcoords_xy = grad.xy,
-                    .texcoords_wh = grad.wh,
+    xvg_shape2_t* shape = _xvg_get_shape(xcl);
+    *shape              = (xvg_shape2_t){
+                     .topleft      = {cx - radius_px, cy - radius_px},
+                     .bottomright  = {cx + radius_px, cy + radius_px},
+                     .sdf_data     = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, feather, stroke_width),
+                     .colour1      = grad.colour1,
+                     .colour2      = grad.colour2,
+                     .gradient_a   = {grad.gradient_a[0], grad.gradient_a[1]},
+                     .gradient_b   = {grad.gradient_b[0], grad.gradient_b[1]},
+                     .texcoords_xy = grad.xy,
+                     .texcoords_wh = grad.wh,
     };
 }
 
@@ -1135,18 +1167,18 @@ void xvg_draw_solid_rectangle_with_gradient(XVGCommandList* xcl, int x, int y, i
 {
     unsigned tex_idx = _xvg_set_bound_texture(xcl, &grad);
 
-    xvg_shape_t* shape = _xvg_get_shape(xcl);
-    *shape             = (xvg_shape_t){
-                    .topleft             = {x, y},
-                    .bottomright         = {x + width, y + height},
-                    .sdf_data            = _xvg_compress_sdf_data(tex_idx, XVG_SHAPE_RECTANGLE, grad.type, 0, 0),
-                    .borderradius_arcpie = 0,
-                    .colour1             = grad.colour1,
-                    .colour2             = grad.colour2,
-                    .gradient_a          = {grad.gradient_a[0], grad.gradient_a[1]},
-                    .gradient_b          = {grad.gradient_b[0], grad.gradient_b[1]},
-                    .texcoords_xy        = grad.xy,
-                    .texcoords_wh        = grad.wh,
+    xvg_shape2_t* shape = _xvg_get_shape(xcl);
+    *shape              = (xvg_shape2_t){
+                     .topleft             = {x, y},
+                     .bottomright         = {x + width, y + height},
+                     .sdf_data            = _xvg_compress_sdf_data(tex_idx, XVG_SHAPE_RECTANGLE, grad.type, 0, 0),
+                     .borderradius_arcpie = 0,
+                     .colour1             = grad.colour1,
+                     .colour2             = grad.colour2,
+                     .gradient_a          = {grad.gradient_a[0], grad.gradient_a[1]},
+                     .gradient_b          = {grad.gradient_b[0], grad.gradient_b[1]},
+                     .texcoords_xy        = grad.xy,
+                     .texcoords_wh        = grad.wh,
     };
 }
 
@@ -1175,19 +1207,19 @@ void xvg_draw_rectangle_with_gradient_ex(
     // float feather = 4.0f / xm_minf(w, h);
     float feather = 4.0f / h;
 
-    xvg_shape_t* shape = _xvg_get_shape(xcl);
-    *shape             = (xvg_shape_t){
-                    .topleft             = {x, y},
-                    .bottomright         = {x + w, y + h},
-                    .sdf_data            = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, feather, stroke),
-                    .borderradius_arcpie = _xvg_compress_border_radius(br_tr, br_br, br_tl, br_bl),
+    xvg_shape2_t* shape = _xvg_get_shape(xcl);
+    *shape              = (xvg_shape2_t){
+                     .topleft             = {x, y},
+                     .bottomright         = {x + w, y + h},
+                     .sdf_data            = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, feather, stroke),
+                     .borderradius_arcpie = _xvg_compress_border_radius(br_tr, br_br, br_tl, br_bl),
 
-                    .colour1      = grad.colour1,
-                    .colour2      = grad.colour2,
-                    .gradient_a   = {grad.gradient_a[0], grad.gradient_a[1]},
-                    .gradient_b   = {grad.gradient_b[0], grad.gradient_b[1]},
-                    .texcoords_xy = grad.xy,
-                    .texcoords_wh = grad.wh,
+                     .colour1      = grad.colour1,
+                     .colour2      = grad.colour2,
+                     .gradient_a   = {grad.gradient_a[0], grad.gradient_a[1]},
+                     .gradient_b   = {grad.gradient_b[0], grad.gradient_b[1]},
+                     .texcoords_xy = grad.xy,
+                     .texcoords_wh = grad.wh,
     };
 }
 
@@ -1232,18 +1264,18 @@ void xvg_draw_triangle_with_gradient(
     XVGShapeType shape_type = stroke > 0 ? XVG_SHAPE_TRIANGLE_STROKE : XVG_SHAPE_TRIANGLE_FILL;
     float        feather    = 4.0f / xm_minf(w, h);
 
-    xvg_shape_t* shape = _xvg_get_shape(xcl);
-    *shape             = (xvg_shape_t){
-                    .topleft             = {x, y},
-                    .bottomright         = {x + w, y + h},
-                    .sdf_data            = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, feather, stroke),
-                    .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(rotate, 0),
-                    .colour1             = grad.colour1,
-                    .colour2             = grad.colour2,
-                    .gradient_a          = {grad.gradient_a[0], grad.gradient_a[1]},
-                    .gradient_b          = {grad.gradient_b[0], grad.gradient_b[1]},
-                    .texcoords_xy        = grad.xy,
-                    .texcoords_wh        = grad.wh,
+    xvg_shape2_t* shape = _xvg_get_shape(xcl);
+    *shape              = (xvg_shape2_t){
+                     .topleft             = {x, y},
+                     .bottomright         = {x + w, y + h},
+                     .sdf_data            = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, feather, stroke),
+                     .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(rotate, 0),
+                     .colour1             = grad.colour1,
+                     .colour2             = grad.colour2,
+                     .gradient_a          = {grad.gradient_a[0], grad.gradient_a[1]},
+                     .gradient_b          = {grad.gradient_b[0], grad.gradient_b[1]},
+                     .texcoords_xy        = grad.xy,
+                     .texcoords_wh        = grad.wh,
     };
 }
 
@@ -1277,18 +1309,18 @@ void xvg_draw_pie_with_gradient(
     float        angle_range  = end_turn - start_turn;
     float        angle_rotate = (end_turn + start_turn);
 
-    xvg_shape_t* shape = _xvg_get_shape(xcl);
-    *shape             = (xvg_shape_t){
-                    .topleft             = {cx - radius_px, cy - radius_px},
-                    .bottomright         = {cx + radius_px, cy + radius_px},
-                    .sdf_data            = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, feather, stroke_width),
-                    .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(angle_rotate * 0.5f, angle_range * 0.5f),
-                    .colour1             = grad.colour1,
-                    .colour2             = grad.colour2,
-                    .gradient_a          = {grad.gradient_a[0], grad.gradient_a[1]},
-                    .gradient_b          = {grad.gradient_b[0], grad.gradient_b[1]},
-                    .texcoords_xy        = grad.xy,
-                    .texcoords_wh        = grad.wh,
+    xvg_shape2_t* shape = _xvg_get_shape(xcl);
+    *shape              = (xvg_shape2_t){
+                     .topleft             = {cx - radius_px, cy - radius_px},
+                     .bottomright         = {cx + radius_px, cy + radius_px},
+                     .sdf_data            = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, feather, stroke_width),
+                     .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(angle_rotate * 0.5f, angle_range * 0.5f),
+                     .colour1             = grad.colour1,
+                     .colour2             = grad.colour2,
+                     .gradient_a          = {grad.gradient_a[0], grad.gradient_a[1]},
+                     .gradient_b          = {grad.gradient_b[0], grad.gradient_b[1]},
+                     .texcoords_xy        = grad.xy,
+                     .texcoords_wh        = grad.wh,
     };
 }
 
@@ -1339,18 +1371,18 @@ void xvg_draw_arc_with_gradient(
         rotate_turns += 0.5f;
     }
 
-    xvg_shape_t* shape = _xvg_get_shape(xcl);
-    *shape             = (xvg_shape_t){
-                    .topleft             = {cx - radius_px, cy - radius_px},
-                    .bottomright         = {cx + radius_px, cy + radius_px},
-                    .sdf_data            = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, feather, stroke_width * 0.5f),
-                    .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(rotate_turns, range_turns),
-                    .colour1             = grad.colour1,
-                    .colour2             = grad.colour2,
-                    .gradient_a          = {grad.gradient_a[0], grad.gradient_a[1]},
-                    .gradient_b          = {grad.gradient_b[0], grad.gradient_b[1]},
-                    .texcoords_xy        = grad.xy,
-                    .texcoords_wh        = grad.wh,
+    xvg_shape2_t* shape = _xvg_get_shape(xcl);
+    *shape              = (xvg_shape2_t){
+                     .topleft             = {cx - radius_px, cy - radius_px},
+                     .bottomright         = {cx + radius_px, cy + radius_px},
+                     .sdf_data            = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, feather, stroke_width * 0.5f),
+                     .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(rotate_turns, range_turns),
+                     .colour1             = grad.colour1,
+                     .colour2             = grad.colour2,
+                     .gradient_a          = {grad.gradient_a[0], grad.gradient_a[1]},
+                     .gradient_b          = {grad.gradient_b[0], grad.gradient_b[1]},
+                     .texcoords_xy        = grad.xy,
+                     .texcoords_wh        = grad.wh,
     };
 }
 
@@ -1392,18 +1424,18 @@ void xvg_draw_line_round_with_gradient(
         .a = y0 > y1 ? 0 : 255,
     };
 
-    xvg_shape_t* shape = _xvg_get_shape(xcl);
-    *shape             = (xvg_shape_t){
-                    .topleft             = {xl, yt},
-                    .bottomright         = {xr, yb},
-                    .sdf_data            = _xvg_compress_sdf_data(0, XVG_SHAPE_LINE_ROUND, grad.type, feather, stroke * 0.5f),
-                    .borderradius_arcpie = stroke_offsets.u32,
-                    .colour1             = grad.colour1,
-                    .colour2             = grad.colour2,
-                    .gradient_a          = {grad.gradient_a[0], grad.gradient_a[1]},
-                    .gradient_b          = {grad.gradient_b[0], grad.gradient_b[1]},
-                    .texcoords_xy        = grad.xy,
-                    .texcoords_wh        = grad.wh,
+    xvg_shape2_t* shape = _xvg_get_shape(xcl);
+    *shape              = (xvg_shape2_t){
+                     .topleft             = {xl, yt},
+                     .bottomright         = {xr, yb},
+                     .sdf_data            = _xvg_compress_sdf_data(0, XVG_SHAPE_LINE_ROUND, grad.type, feather, stroke * 0.5f),
+                     .borderradius_arcpie = stroke_offsets.u32,
+                     .colour1             = grad.colour1,
+                     .colour2             = grad.colour2,
+                     .gradient_a          = {grad.gradient_a[0], grad.gradient_a[1]},
+                     .gradient_b          = {grad.gradient_b[0], grad.gradient_b[1]},
+                     .texcoords_xy        = grad.xy,
+                     .texcoords_wh        = grad.wh,
     };
 }
 
@@ -1481,20 +1513,20 @@ void _xvg_draw_line_plot_ex(
 
     unsigned tex_idx = _xvg_set_bound_texture(xcl, &grad);
 
-    xvg_shape_t* shape = _xvg_get_shape(xcl);
-    *shape             = (xvg_shape_t){
-                    .topleft             = {x, y - stroke_width * 0.25f},
-                    .bottomright         = {x + width, y + height + stroke_width * 0.25},
-                    .sdf_data            = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, feather, stroke_width),
-                    .borderradius_arcpie = _xvg_compress_border_radius(crop_br, crop_br, crop_br, crop_br),
-                    .buffer_idx_range    = range.u32,
+    xvg_shape2_t* shape = _xvg_get_shape(xcl);
+    *shape              = (xvg_shape2_t){
+                     .topleft             = {x, y - stroke_width * 0.25f},
+                     .bottomright         = {x + width, y + height + stroke_width * 0.25},
+                     .sdf_data            = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, feather, stroke_width),
+                     .borderradius_arcpie = _xvg_compress_border_radius(crop_br, crop_br, crop_br, crop_br),
+                     .buffer_idx_range    = range.u32,
 
-                    .colour1      = grad.colour1,
-                    .colour2      = grad.colour2,
-                    .gradient_a   = {grad.gradient_a[0], grad.gradient_a[1]},
-                    .gradient_b   = {grad.gradient_b[0], grad.gradient_b[1]},
-                    .texcoords_xy = grad.xy,
-                    .texcoords_wh = grad.wh,
+                     .colour1      = grad.colour1,
+                     .colour2      = grad.colour2,
+                     .gradient_a   = {grad.gradient_a[0], grad.gradient_a[1]},
+                     .gradient_b   = {grad.gradient_b[0], grad.gradient_b[1]},
+                     .texcoords_xy = grad.xy,
+                     .texcoords_wh = grad.wh,
     };
 }
 
@@ -2452,6 +2484,20 @@ XVGCommandList* xvg_command_list_create(XVG* xvg)
         .storage_buffer = xcl->shapes_sbo,
     });
 
+    // const int shapes_img_width = XVG_ARRLEN(xcl->shapes) * (sizeof(xcl->shapes[0]) / 16);
+
+    // xcl->shapes_img      = sg_make_image(&(sg_image_desc){
+    //          .usage.stream_update = true,
+    //          .width               = shapes_img_width,
+    //          .height              = 1,
+    //          .pixel_format        = SG_PIXELFORMAT_RGBA32F,
+    //          .sample_count        = 1,
+
+    //          .label = XVG_LABEL("xcl-shapes"),
+    // });
+    // xcl->shapes_img_view = sg_make_view(&(sg_view_desc){.texture.image = xcl->shapes_img});
+    // XVG_ASSERT(xcl->shapes_img_view.id);
+
     xcl->lines_sbo = sg_make_buffer(&(sg_buffer_desc){
         .usage.storage_buffer = true,
         .usage.stream_update  = true,
@@ -2520,9 +2566,11 @@ void xvg_command_list_end_frame(XVGCommandList* xcl, int window_width, int windo
     {
         if (xcl->frame.num_shapes > XVG_ARRLEN(xcl->shapes))
             xcl->frame.num_shapes = XVG_ARRLEN(xcl->shapes);
-        size_t   num_bytes = sizeof(xcl->shapes[0]) * xcl->frame.num_shapes;
-        sg_range range     = {.ptr = xcl->shapes, .size = num_bytes};
+        size_t num_bytes = sizeof(xcl->shapes[0]) * xcl->frame.num_shapes;
+        // size_t   num_bytes = sizeof(xcl->shapes);
+        sg_range range = {.ptr = xcl->shapes, .size = num_bytes};
         sg_update_buffer(xcl->shapes_sbo, &range);
+        // sg_update_image(xcl->shapes_img, &(sg_image_data){.mip_levels[0] = range});
     }
     if (xcl->frame.num_line_segments)
     {
@@ -2609,7 +2657,10 @@ void xvg_command_list_end_frame(XVGCommandList* xcl, int window_width, int windo
                     smp = xvg->smp_linear;
 
                 sg_apply_bindings(&(sg_bindings){
-                    .views[VIEW_vs_xvg_shapes_buffer]      = xcl->shapes_sbv,
+                    // .views[VIEW_vs_xvg_shapes_img]   = xcl->shapes_img_view,
+                    // .samplers[SMP_vs_xvg_shapes_smp] = xvg->smp_nearest_neighbour,
+                    .views[VIEW_vs_xvg_shapes_buffer] = xcl->shapes_sbv,
+
                     .views[VIEW_fs_xvg_shapes_line_buffer] = xcl->lines_sbv,
                     .views[VIEW_fs_xvg_shapes_tex1]        = draw->shape_texture[0],
                     .views[VIEW_fs_xvg_shapes_tex2]        = draw->shape_texture[1],

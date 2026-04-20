@@ -8,40 +8,50 @@
 @vs vs_xvg_shapes
 
 // Tightly packed rectangle
-struct xvg_shape
+// struct xvg_shape
+// {
+//     // TODO: compress to int16
+//     vec2 topleft;
+//     vec2 bottomright;
+
+//     // unorm4x8 comprised of:
+//     //   - uint tex_idx;
+//     //   - uint sdf_type && grad_type; // 4 bits each
+//     //   - float stroke_width;
+//     //   - float feather;
+//     uint sdf_data; chunk1.x
+
+//     // packed with either:
+//     // - border radius (unorm4x8)
+//     // - arc/pie rotate and range (unorm2x16)
+//     // - round line stroke offsets
+//     uint borderradius_arcpie; chunk1.y
+
+//     uint colour1; chunk1.z
+//     uint colour2; chunk1.w
+
+//     vec2 gradient_a; chunk2.xy
+//     vec2 gradient_b; chunk2.zw
+
+
+//     uint buffer_idx_range; // unorm2x16, chunk3.x
+//     uint _padding; // unorm2x16, chunk3.y
+
+//     uint texcoords_xy; // unorm2x16, chunk3.z
+//     uint texcoords_wh; // unorm2x16, chunk3.w
+// };
+
+struct xvg_shape_chunk16
 {
-    // TODO: compress to int16
-    vec2 topleft;
-    vec2 bottomright;
-
-    // unorm4x8 comprised of:
-    //   - uint tex_idx;
-    //   - uint sdf_type && grad_type; // 4 bits each
-    //   - float stroke_width;
-    //   - float feather;
-    uint sdf_data;
-
-    // packed with either:
-    // - border radius (unorm4x8)
-    // - arc/pie rotate and range (unorm2x16)
-    // - round line stroke offsets
-    uint borderradius_arcpie;
-
-    uint colour1;
-    uint colour2;
-
-    vec2 gradient_a;
-    vec2 gradient_b;
-
-    uint buffer_idx_range; // unorm2x16
-
-    uint texcoords_xy; // unorm2x16
-    uint texcoords_wh; // unorm2x16
+    vec4 xyzw;
 };
 
 layout(binding=0) readonly buffer vs_xvg_shapes_buffer {
-    xvg_shape vtx[];
+    // xvg_shape vtx[];
+    xvg_shape_chunk16 chunks[];
 };
+// layout(binding=0) uniform texture2D vs_xvg_shapes_img;
+// layout(binding=0) uniform sampler vs_xvg_shapes_smp;
 
 layout(binding=0) uniform vs_xvg_shapes_uniforms {
     vec2 u_size;
@@ -112,7 +122,21 @@ void main() {
     uint v_idx = gl_VertexIndex / 6u;
     uint i_idx = gl_VertexIndex - v_idx * 6;
 
-    xvg_shape vert = vtx[v_idx + u_storage_buffer_offset];
+    uint storage_img_idx = (v_idx + u_storage_buffer_offset) * 4;
+    // xvg_shape vert = vtx[v_idx + u_storage_buffer_offset];
+    // vec4 chunk1 = texelFetch(vs_xvg_shapes_buffer, ivec2(storage_img_idx + 0));
+
+    // vec4  chunk0 =                 texelFetch(sampler2D(vs_xvg_shapes_img, vs_xvg_shapes_smp), ivec2(storage_img_idx + 0), 0);
+    // uvec4 chunk1 = floatBitsToUint(texelFetch(sampler2D(vs_xvg_shapes_img, vs_xvg_shapes_smp), ivec2(storage_img_idx + 1), 0));
+    // vec4  chunk2 =                 texelFetch(sampler2D(vs_xvg_shapes_img, vs_xvg_shapes_smp), ivec2(storage_img_idx + 2), 0);
+    // uvec4 chunk3 = floatBitsToUint(texelFetch(sampler2D(vs_xvg_shapes_img, vs_xvg_shapes_smp), ivec2(storage_img_idx + 3), 0));
+
+    // vec4  chunk0 =                 vec4(0,0, u_size / 2);
+
+    vec4  chunk0 =                 chunks[storage_img_idx + 0].xyzw;
+    uvec4 chunk1 = floatBitsToUint(chunks[storage_img_idx + 1].xyzw);
+    vec4  chunk2 =                 chunks[storage_img_idx + 2].xyzw;
+    uvec4 chunk3 = floatBitsToUint(chunks[storage_img_idx + 3].xyzw);
 
     //  0.5f,  0.5f,
     // -0.5f, -0.5f,
@@ -126,22 +150,22 @@ void main() {
     bool is_bottom = i_idx >= 2 && i_idx <= 4;
 
     vec2 pos = vec2(
-        is_right  ? vert.bottomright.x : vert.topleft.x,
-        is_bottom ? vert.bottomright.y : vert.topleft.y
+        is_right  ? chunk0.z : chunk0.x,
+        is_bottom ? chunk0.w : chunk0.y
     );
 
     pos = (pos + pos) / u_size - vec2(1);
     pos.y = -pos.y;
 
-    float vw = vert.bottomright.x - vert.topleft.x;
-    float vh = vert.bottomright.y - vert.topleft.y;
+    float vw = chunk0.z - chunk0.x;
+    float vh = chunk0.w - chunk0.y;
 
     gl_Position = vec4(pos, 1, 1);
 
     p        = vec2(is_right  ? 1 : -1, is_bottom ? -1 : 1);
     px_scale = vw / vh;
 
-    vec4 sdf_data = unpackUnorm4x8(vert.sdf_data);
+    vec4 sdf_data = unpackUnorm4x8(chunk1.x);
 
     uint sdf_and_grad_type = uint(sdf_data.y * 255);
 
@@ -161,7 +185,7 @@ void main() {
     ||  sdf_type == XVG_SHAPE_LINE_PLOT_BG
         )
     {
-        borderradius_arcpie = (unpackUnorm4x8(vert.borderradius_arcpie) * 255) / vec4(vh * 0.5);        
+        borderradius_arcpie = (unpackUnorm4x8(chunk1.y) * 255) / vec4(vh * 0.5);        
     }
 
     if (sdf_type == XVG_SHAPE_TRIANGLE_FILL
@@ -170,27 +194,27 @@ void main() {
     ||  sdf_type == XVG_SHAPE_PIE_STROKE
     ||  sdf_type == XVG_SHAPE_ARC_ROUND_STROKE
     ||  sdf_type == XVG_SHAPE_ARC_BUTT_STROKE
-    )
+        )
     {
-        vec2 arcpie   = 2 * PI * unpackUnorm2x16(vert.borderradius_arcpie);
+        vec2 arcpie   = 2 * PI * unpackUnorm2x16(chunk1.y);
         borderradius_arcpie.xy = vec2(cos(arcpie.x), sin(arcpie.x));
         borderradius_arcpie.zw = vec2(sin(arcpie.y), cos(arcpie.y));
     }
 
     if (sdf_type == XVG_SHAPE_LINE_ROUND)
     {
-        vec4 fugg = unpackUnorm4x8(vert.borderradius_arcpie);
-        vec4 lmao = vec4(vert.topleft.x     + stroke_width_px * 2,
-                         vert.topleft.y     + stroke_width_px * 2,
-                         vert.bottomright.x - stroke_width_px * 2,
-                         vert.bottomright.y - stroke_width_px * 2);
+        vec4 fugg = unpackUnorm4x8(chunk1.y);
+        vec4 lmao = vec4(chunk0.x + stroke_width_px * 2,
+                         chunk0.y + stroke_width_px * 2,
+                         chunk0.z - stroke_width_px * 2,
+                         chunk0.w - stroke_width_px * 2);
 
         borderradius_arcpie.x   = fugg.x == 0 ? lmao.x : lmao.z;
         borderradius_arcpie.y   = fugg.y == 0 ? lmao.y : lmao.w;
         borderradius_arcpie.z   = fugg.z == 0 ? lmao.x : lmao.z;
         borderradius_arcpie.w   = fugg.w == 0 ? lmao.y : lmao.w;
-        borderradius_arcpie.xy -= vert.topleft;
-        borderradius_arcpie.zw -= vert.topleft;
+        borderradius_arcpie.xy -= chunk0.xy;
+        borderradius_arcpie.zw -= chunk0.xy;
         borderradius_arcpie /= vec4(vw, vh, vw, vh);
 
         borderradius_arcpie = 2 * borderradius_arcpie - 1;
@@ -199,39 +223,39 @@ void main() {
 
     if (sdf_type == XVG_SHAPE_LINE_PLOT
     ||  sdf_type == XVG_SHAPE_LINE_PLOT_BG
-    )
+        )
     {
-        vec2 range = unpackUnorm2x16(vert.buffer_idx_range) * vec2(65535);
+        vec2 range = unpackUnorm2x16(chunk3.x) * vec2(65535);
 
         // buffer_idx       = is_right ? range.y : range.x;
-        buffer_idx_range = vert.buffer_idx_range;
+        buffer_idx_range = chunk3.x;
         px_inc       = 2.0 / u_size.y;
     }
 
     if (grad_type == XVG_COLOUR_LINEAR_GRADIENT)
     {
-        gradient_a = (vert.gradient_a - vert.topleft) / vec2(vw, vh); // stop 1 xy
-        gradient_b = (vert.gradient_b - vert.topleft) / vec2(vw, vh); // stop 2 xy
+        gradient_a = (chunk2.xy - chunk0.xy) / vec2(vw, vh); // stop 1 xy
+        gradient_b = (chunk2.zw - chunk0.xy) / vec2(vw, vh); // stop 2 xy
     }
     if (grad_type == XVG_COLOUR_RADIAL_GRADIENT)
     {
-        gradient_a = (vert.gradient_a - vert.topleft) / vec2(vw, vh); // stop 2 cx,cy
-        gradient_b = vec2(vw, vh) / vert.gradient_b;                  // stop 1 radius
+        gradient_a = (chunk2.xy - chunk0.xy) / vec2(vw, vh); // stop 2 cx,cy
+        gradient_b = vec2(vw, vh) / chunk2.zw;                  // stop 1 radius
     }
     if (grad_type == XVG_COLOUR_CONIC_GRADIENT)
     {
-        float rotation = vert.gradient_a.x* 2 * PI;      // turns to radians
+        float rotation = chunk2.x* 2 * PI;      // turns to radians
         gradient_a = vec2(cos(rotation), sin(rotation)); // rotation
-        gradient_b = vert.gradient_b;                    // range (turns)
+        gradient_b = chunk2.zw;                    // range (turns)
     }
     if (grad_type == XVG_COLOUR_DROP_SHADOW || grad_type == XVG_COLOUR_INNER_SHADOW)
     {
-        gradient_a = vert.gradient_a / vec2(-vw, vh); // translate x/y
-        gradient_b = vert.gradient_b / vh;            // blur radius & spread
+        gradient_a = chunk2.xy / vec2(-vw, vh); // translate x/y
+        gradient_b = chunk2.zw / vh;            // blur radius & spread
     }
 
-    vec2 texcoords_xy = unpackUnorm2x16(vert.texcoords_xy) * vec2(65535);
-    vec2 texcoords_rb = unpackUnorm2x16(vert.texcoords_wh) * vec2(65535) + texcoords_xy;
+    vec2 texcoords_xy = unpackUnorm2x16(chunk3.z) * vec2(65535);
+    vec2 texcoords_rb = unpackUnorm2x16(chunk3.w) * vec2(65535) + texcoords_xy;
 
     vec2 texture_size = tex_idx == 1 ? u_texture_size_1 : tex_idx == 2 ? u_texture_size_2 : tex_idx == 3 ? u_texture_size_3 : tex_idx == 4 ? u_texture_size_4 : vec2(1);
     texcoords_xy = texcoords_xy / texture_size;
@@ -242,8 +266,8 @@ void main() {
         is_bottom ? texcoords_rb.y : texcoords_xy.y
     );
 
-    colour1 = vert.colour1;
-    colour2 = vert.colour2;
+    colour1 = chunk1.z;
+    colour2 = chunk1.w;
 }
 @end
 
@@ -253,7 +277,7 @@ layout(binding=2) uniform texture2D fs_xvg_shapes_tex1;
 layout(binding=3) uniform texture2D fs_xvg_shapes_tex2;
 layout(binding=4) uniform texture2D fs_xvg_shapes_tex3;
 layout(binding=5) uniform texture2D fs_xvg_shapes_tex4;
-layout(binding=0) uniform sampler fs_xvg_shapes_smp;
+layout(binding=1) uniform sampler fs_xvg_shapes_smp;
 
 struct xvg_line_segment {
     float y;
