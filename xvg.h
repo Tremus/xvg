@@ -361,11 +361,11 @@ typedef struct XVGCommandList
     XVG*         xvg;   // not owned
     LinkedArena* arena; // not owned
 
-    sg_buffer shapes_sbo;
-    sg_view   shapes_sbv;
+    // sg_buffer shapes_sbo;
+    // sg_view   shapes_sbv;
 
-    // sg_image shapes_img;
-    // sg_view  shapes_img_view;
+    sg_image shapes_img;
+    sg_view  shapes_img_view;
 
     sg_view   lines_sbv;
     sg_buffer lines_sbo; // normalised y values
@@ -2474,29 +2474,31 @@ XVGCommandList* xvg_command_list_create(XVG* xvg)
     xcl->xvg   = xvg;
     xcl->arena = xvg->arena;
 
-    xcl->shapes_sbo = sg_make_buffer(&(sg_buffer_desc){
-        .usage.storage_buffer = true,
-        .usage.stream_update  = true,
-        .size                 = sizeof(xcl->shapes),
-        .label                = XVG_LABEL("xcl-shapes"),
-    });
-    xcl->shapes_sbv = sg_make_view(&(sg_view_desc){
-        .storage_buffer = xcl->shapes_sbo,
-    });
-
-    // const int shapes_img_width = XVG_ARRLEN(xcl->shapes) * (sizeof(xcl->shapes[0]) / 16);
-
-    // xcl->shapes_img      = sg_make_image(&(sg_image_desc){
-    //          .usage.stream_update = true,
-    //          .width               = shapes_img_width,
-    //          .height              = 1,
-    //          .pixel_format        = SG_PIXELFORMAT_RGBA32F,
-    //          .sample_count        = 1,
-
-    //          .label = XVG_LABEL("xcl-shapes"),
+    // xcl->shapes_sbo = sg_make_buffer(&(sg_buffer_desc){
+    //     .usage.storage_buffer = true,
+    //     .usage.stream_update  = true,
+    //     .size                 = sizeof(xcl->shapes),
+    //     .label                = XVG_LABEL("xcl-shapes"),
     // });
-    // xcl->shapes_img_view = sg_make_view(&(sg_view_desc){.texture.image = xcl->shapes_img});
-    // XVG_ASSERT(xcl->shapes_img_view.id);
+    // xcl->shapes_sbv = sg_make_view(&(sg_view_desc){
+    //     .storage_buffer = xcl->shapes_sbo,
+    // });
+
+    const int shapes_img_width = XVG_ARRLEN(xcl->shapes) * (sizeof(xcl->shapes[0]) / 16);
+
+    xcl->shapes_img      = sg_make_image(&(sg_image_desc){
+             .usage.stream_update = true,
+             .width               = shapes_img_width,
+             .height              = 1,
+             .pixel_format        = SG_PIXELFORMAT_RGBA32F,
+             .sample_count = 1,
+             .num_mipmaps  = 1,
+             .num_slices   = 1,
+
+             .label = XVG_LABEL("xcl-shapes"),
+    });
+    xcl->shapes_img_view = sg_make_view(&(sg_view_desc){.texture.image = xcl->shapes_img});
+    XVG_ASSERT(xcl->shapes_img_view.id);
 
     xcl->lines_sbo = sg_make_buffer(&(sg_buffer_desc){
         .usage.storage_buffer = true,
@@ -2544,11 +2546,10 @@ void xvg_end_frame(XVG* xcl)
             sg_view_desc desc = sg_query_view_desc(atlas->img_view);
             sg_update_image(
                 desc.texture.image,
-                &(sg_image_data){
-                    .mip_levels[0] = {
-                        .ptr  = atlas->img_data,
-                        .size = XVG_ATLAS_HEIGHT * XVG_ATLAS_ROW_STRIDE,
-                    }});
+                &(sg_image_data){.mip_levels[0] = {
+                                     .ptr  = atlas->img_data,
+                                     .size = XVG_ATLAS_HEIGHT * XVG_ATLAS_ROW_STRIDE,
+                                 }});
             atlas->dirty = false;
         }
     }
@@ -2566,11 +2567,11 @@ void xvg_command_list_end_frame(XVGCommandList* xcl, int window_width, int windo
     {
         if (xcl->frame.num_shapes > XVG_ARRLEN(xcl->shapes))
             xcl->frame.num_shapes = XVG_ARRLEN(xcl->shapes);
-        size_t num_bytes = sizeof(xcl->shapes[0]) * xcl->frame.num_shapes;
-        // size_t   num_bytes = sizeof(xcl->shapes);
-        sg_range range = {.ptr = xcl->shapes, .size = num_bytes};
-        sg_update_buffer(xcl->shapes_sbo, &range);
-        // sg_update_image(xcl->shapes_img, &(sg_image_data){.mip_levels[0] = range});
+        // size_t num_bytes = sizeof(xcl->shapes[0]) * xcl->frame.num_shapes;
+        size_t   num_bytes = sizeof(xcl->shapes);
+        sg_range range     = {.ptr = xcl->shapes, .size = num_bytes};
+        // sg_update_buffer(xcl->shapes_sbo, &range);
+        sg_update_image(xcl->shapes_img, &(sg_image_data){.mip_levels[0] = range});
     }
     if (xcl->frame.num_line_segments)
     {
@@ -2657,9 +2658,9 @@ void xvg_command_list_end_frame(XVGCommandList* xcl, int window_width, int windo
                     smp = xvg->smp_linear;
 
                 sg_apply_bindings(&(sg_bindings){
-                    // .views[VIEW_vs_xvg_shapes_img]   = xcl->shapes_img_view,
-                    // .samplers[SMP_vs_xvg_shapes_smp] = xvg->smp_nearest_neighbour,
-                    .views[VIEW_vs_xvg_shapes_buffer] = xcl->shapes_sbv,
+                    .views[VIEW_vs_xvg_shapes_img]   = xcl->shapes_img_view,
+                    .samplers[SMP_vs_xvg_shapes_smp] = xvg->smp_nearest_neighbour,
+                    // .views[VIEW_vs_xvg_shapes_buffer] = xcl->shapes_sbv,
 
                     .views[VIEW_fs_xvg_shapes_line_buffer] = xcl->lines_sbv,
                     .views[VIEW_fs_xvg_shapes_tex1]        = draw->shape_texture[0],

@@ -41,17 +41,17 @@
 //     uint texcoords_wh; // unorm2x16, chunk3.w
 // };
 
-struct xvg_shape_chunk16
-{
-    vec4 xyzw;
-};
+// struct xvg_shape_chunk16
+// {
+//     vec4 xyzw;
+// };
 
-layout(binding=0) readonly buffer vs_xvg_shapes_buffer {
-    // xvg_shape vtx[];
-    xvg_shape_chunk16 chunks[];
-};
-// layout(binding=0) uniform texture2D vs_xvg_shapes_img;
-// layout(binding=0) uniform sampler vs_xvg_shapes_smp;
+// layout(binding=0) readonly buffer vs_xvg_shapes_buffer {
+//     // xvg_shape vtx[];
+//     xvg_shape_chunk16 chunks[];
+// };
+layout(binding=0) uniform texture2D vs_xvg_shapes_img;
+layout(binding=0) uniform sampler vs_xvg_shapes_smp;
 
 layout(binding=0) uniform vs_xvg_shapes_uniforms {
     vec2 u_size;
@@ -126,17 +126,15 @@ void main() {
     // xvg_shape vert = vtx[v_idx + u_storage_buffer_offset];
     // vec4 chunk1 = texelFetch(vs_xvg_shapes_buffer, ivec2(storage_img_idx + 0));
 
-    // vec4  chunk0 =                 texelFetch(sampler2D(vs_xvg_shapes_img, vs_xvg_shapes_smp), ivec2(storage_img_idx + 0), 0);
-    // uvec4 chunk1 = floatBitsToUint(texelFetch(sampler2D(vs_xvg_shapes_img, vs_xvg_shapes_smp), ivec2(storage_img_idx + 1), 0));
-    // vec4  chunk2 =                 texelFetch(sampler2D(vs_xvg_shapes_img, vs_xvg_shapes_smp), ivec2(storage_img_idx + 2), 0);
-    // uvec4 chunk3 = floatBitsToUint(texelFetch(sampler2D(vs_xvg_shapes_img, vs_xvg_shapes_smp), ivec2(storage_img_idx + 3), 0));
+    vec4  chunk0 =                 texelFetch(sampler2D(vs_xvg_shapes_img, vs_xvg_shapes_smp), ivec2(storage_img_idx + 0, 0), 0);
+    uvec4 chunk1 = floatBitsToUint(texelFetch(sampler2D(vs_xvg_shapes_img, vs_xvg_shapes_smp), ivec2(storage_img_idx + 1, 0), 0));
+    vec4  chunk2 =                 texelFetch(sampler2D(vs_xvg_shapes_img, vs_xvg_shapes_smp), ivec2(storage_img_idx + 2, 0), 0);
+    uvec4 chunk3 = floatBitsToUint(texelFetch(sampler2D(vs_xvg_shapes_img, vs_xvg_shapes_smp), ivec2(storage_img_idx + 3, 0), 0));
 
-    // vec4  chunk0 =                 vec4(0,0, u_size / 2);
-
-    vec4  chunk0 =                 chunks[storage_img_idx + 0].xyzw;
-    uvec4 chunk1 = floatBitsToUint(chunks[storage_img_idx + 1].xyzw);
-    vec4  chunk2 =                 chunks[storage_img_idx + 2].xyzw;
-    uvec4 chunk3 = floatBitsToUint(chunks[storage_img_idx + 3].xyzw);
+    // vec4  chunk0 =                 chunks[storage_img_idx + 0].xyzw;
+    // uvec4 chunk1 = floatBitsToUint(chunks[storage_img_idx + 1].xyzw);
+    // vec4  chunk2 =                 chunks[storage_img_idx + 2].xyzw;
+    // uvec4 chunk3 = floatBitsToUint(chunks[storage_img_idx + 3].xyzw);
 
     //  0.5f,  0.5f,
     // -0.5f, -0.5f,
