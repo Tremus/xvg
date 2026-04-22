@@ -54,25 +54,29 @@ layout(binding=0) uniform vs_xvg_shapes_uniforms {
 
 #define PI 3.141592653589793
 
+// 0-15
 out vec2 p;
 out vec2 texcoord;
 
-out flat float px_scale;
-out flat float px_inc;
-
+// 16-31
 out flat uint tex_idx;
 out flat uint sdf_type;
 out flat uint grad_type;
 out flat uint buffer_idx_range;
 
+// 32-47
+out flat float px_scale;
+out flat float px_inc;
 out flat float feather;
 out flat float stroke_width;
 
+// 48-63
 // either:
 // - border_radius
 // - vec4(cos(rotate), sin(rotate), sin(range), cos(range))
 out flat vec4 borderradius_arcpie;
 
+// 64-79
 // linear_gradient_begin
 // radial_gradient_pos
 // conic_gradient_rotate
@@ -84,6 +88,7 @@ out flat vec2 gradient_a;
 // inner_shadow_blur_radius
 out flat vec2 gradient_b;
 
+// 80-87
 out flat uint colour1;
 out flat uint colour2;
 
@@ -263,27 +268,30 @@ layout(binding=1) readonly buffer fs_xvg_shapes_line_buffer {
     xvg_line_segment line_buffer[];
 };
 
+// 0-15
 in vec2 p;
-in vec2 texcoord; // 16
-
-in flat float px_scale;
-in flat float px_inc;
-
+in vec2 texcoord;
+// 16-31
 in flat uint tex_idx;
-in flat uint sdf_type;  // 32
+in flat uint sdf_type;
 in flat uint grad_type; 
 in flat uint buffer_idx_range;
-
+// 32-47
+in flat float px_scale;
+in flat float px_inc;
 in flat float feather;
-in flat float stroke_width;  // 48
+in flat float stroke_width;
 
-in flat vec4 borderradius_arcpie; // 64
+// 48-63
+in flat vec4 borderradius_arcpie;
 
+// 64-79
 in flat vec2 gradient_a;
-in flat vec2 gradient_b; // 80
+in flat vec2 gradient_b;
 
+// 80-87
 in flat uint colour1;
-in flat uint colour2; // 88
+in flat uint colour2;
 
 out vec4 frag_color;
 
