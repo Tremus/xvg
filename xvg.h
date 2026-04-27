@@ -1404,6 +1404,7 @@ void xvg_draw_line_round_with_gradient(
                     .gradient_b          = {grad.gradient_b[0], grad.gradient_b[1]},
                     .texcoords_xy        = grad.xy,
                     .texcoords_wh        = grad.wh,
+                    .buffer_idx_range    = y0 > y1 ? 1 : 0,
     };
 }
 
