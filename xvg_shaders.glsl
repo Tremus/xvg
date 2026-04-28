@@ -26,20 +26,20 @@ struct xvg_shape
     // - arc/pie rotate and range (unorm2x16)
     // - round line stroke offsets
     uint borderradius_arcpie;
-
-    uint colour1;
-    uint colour2;
-
-    vec2 gradient_a;
-    vec2 gradient_b;
+    
+    uint texcoords_xy; // unorm2x16
+    uint texcoords_wh; // unorm2x16
 
     // line pots (unorm2x16)
     // straight line (bool)
     uint buffer_idx_range; // unorm2x16
     uint _unused;
 
-    uint texcoords_xy; // unorm2x16
-    uint texcoords_wh; // unorm2x16
+    uint colour1;
+    uint colour2;
+
+    vec2 gradient_a;
+    vec2 gradient_b;
 };
 
 layout(binding=0) readonly buffer vs_xvg_shapes_buffer {
@@ -74,10 +74,14 @@ out flat float feather;
 out flat float stroke_width;
 
 // 48-63
-// either:
-// - border_radius
-// - vec4(cos(rotate), sin(rotate), sin(range), cos(range))
-out flat vec4 borderradius_arcpie;
+// - border_radius (right)
+// - vec2(cos(rotate), sin(rotate))
+out flat uint borderradius_arcpie_compressed_1; // snorm2x16
+// - border_radius (left)
+// - vec2(sin(range), cos(range))
+out flat uint borderradius_arcpie_compressed_2; // snorm2x16
+out flat uint colour1;
+out flat uint colour2;
 
 // 64-79
 // linear_gradient_begin
@@ -91,9 +95,7 @@ out flat vec2 gradient_a;
 // inner_shadow_blur_radius
 out flat vec2 gradient_b;
 
-// 80-87
-out flat uint colour1;
-out flat uint colour2;
+// 80-95, nothing. 16 bytes spare
 
 #define XVG_SHAPE_RECTANGLE_FILL   1
 #define XVG_SHAPE_RECTANGLE_STROKE 2
@@ -153,9 +155,7 @@ void main() {
 
     uint sdf_and_grad_type = uint(sdf_data.y * 255);
 
-    tex_idx    = uint(sdf_data.x * 255);
-    // sdf_type     = uint(sdf_data.x * 255);
-    // grad_type    = uint(sdf_data.y * 255);
+    tex_idx   = uint(sdf_data.x * 255);
     sdf_type  = sdf_and_grad_type & 0xf;
     grad_type = sdf_and_grad_type >> 4;
     feather   = sdf_data.z * 1;
@@ -163,6 +163,19 @@ void main() {
     float stroke_width_px =      sdf_data.w * 16;
     stroke_width = px_scale * 2 * stroke_width_px / vw;
 
+    vec2 texcoords_xy = unpackUnorm2x16(vert.texcoords_xy) * vec2(65535);
+    vec2 texcoords_rb = unpackUnorm2x16(vert.texcoords_wh) * vec2(65535) + texcoords_xy;
+
+    vec2 texture_size = tex_idx == 1 ? u_texture_size_1 : tex_idx == 2 ? u_texture_size_2 : tex_idx == 3 ? u_texture_size_3 : tex_idx == 4 ? u_texture_size_4 : vec2(1);
+    texcoords_xy = texcoords_xy / texture_size;
+    texcoords_rb = texcoords_rb / texture_size;
+
+    texcoord = vec2(
+        is_right  ? texcoords_rb.x : texcoords_xy.x,
+        is_bottom ? texcoords_rb.y : texcoords_xy.y
+    );
+
+    vec4 borderradius_arcpie = vec4(0);
     if (sdf_type == XVG_SHAPE_RECTANGLE_FILL
     ||  sdf_type == XVG_SHAPE_RECTANGLE_STROKE
     ||  sdf_type == XVG_SHAPE_LINE_PLOT
@@ -184,6 +197,12 @@ void main() {
         borderradius_arcpie.xy = vec2(cos(arcpie.x), sin(arcpie.x));
         borderradius_arcpie.zw = vec2(sin(arcpie.y), cos(arcpie.y));
     }
+
+    // 48-63
+    borderradius_arcpie_compressed_1 = packSnorm2x16(borderradius_arcpie.xy);
+    borderradius_arcpie_compressed_2 = packSnorm2x16(borderradius_arcpie.zw);
+    colour1 = vert.colour1;
+    colour2 = vert.colour2;
 
     if (sdf_type == XVG_SHAPE_LINE_PLOT
     ||  sdf_type == XVG_SHAPE_LINE_PLOT_BG
@@ -218,21 +237,6 @@ void main() {
         gradient_a = vert.gradient_a / vec2(-vw, vh); // translate x/y
         gradient_b = vert.gradient_b / vh;            // blur radius & spread
     }
-
-    vec2 texcoords_xy = unpackUnorm2x16(vert.texcoords_xy) * vec2(65535);
-    vec2 texcoords_rb = unpackUnorm2x16(vert.texcoords_wh) * vec2(65535) + texcoords_xy;
-
-    vec2 texture_size = tex_idx == 1 ? u_texture_size_1 : tex_idx == 2 ? u_texture_size_2 : tex_idx == 3 ? u_texture_size_3 : tex_idx == 4 ? u_texture_size_4 : vec2(1);
-    texcoords_xy = texcoords_xy / texture_size;
-    texcoords_rb = texcoords_rb / texture_size;
-
-    texcoord = vec2(
-        is_right  ? texcoords_rb.x : texcoords_xy.x,
-        is_bottom ? texcoords_rb.y : texcoords_xy.y
-    );
-
-    colour1 = vert.colour1;
-    colour2 = vert.colour2;
 }
 @end
 
@@ -267,15 +271,15 @@ in flat float feather;
 in flat float stroke_width;
 
 // 48-63
-in flat vec4 borderradius_arcpie;
+in flat uint borderradius_arcpie_compressed_1; // snorm2x16
+in flat uint borderradius_arcpie_compressed_2; // snorm2x16
+in flat uint colour1;
+in flat uint colour2;
 
 // 64-79
 in flat vec2 gradient_a;
 in flat vec2 gradient_b;
 
-// 80-87
-in flat uint colour1;
-in flat uint colour2;
 
 out vec4 frag_color;
 
@@ -376,6 +380,9 @@ void main()
 
     vec2 p_scale = vec2(px_scale, 1);
     float shape = 1;
+
+    vec4 borderradius_arcpie = vec4(unpackSnorm2x16(borderradius_arcpie_compressed_1),
+                                    unpackSnorm2x16(borderradius_arcpie_compressed_2));
     if (sdf_type == XVG_SHAPE_RECTANGLE_FILL)
     {
         vec2 b = p_scale;
