@@ -1392,6 +1392,10 @@ void xvg_draw_line_round_with_gradient(
         .a = y0 > y1 ? 0 : 255,
     };
 
+    bool line_is_descending = y0 > y1;
+    if (x0 > x1)
+        line_is_descending = !line_is_descending;
+
     xvg_shape_t* shape = _xvg_get_shape(xcl);
     *shape             = (xvg_shape_t){
                     .topleft             = {xl, yt},
@@ -1404,7 +1408,7 @@ void xvg_draw_line_round_with_gradient(
                     .gradient_b          = {grad.gradient_b[0], grad.gradient_b[1]},
                     .texcoords_xy        = grad.xy,
                     .texcoords_wh        = grad.wh,
-                    .buffer_idx_range    = y0 > y1 ? 1 : 0,
+                    .buffer_idx_range    = line_is_descending ? 1 : 0,
     };
 }
 
