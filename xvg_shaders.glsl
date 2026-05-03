@@ -153,11 +153,9 @@ void main() {
 
     vec4 sdf_data = unpackUnorm4x8(vert.sdf_data);
 
-    uint sdf_and_grad_type = uint(sdf_data.y * 255);
-
-    tex_idx   = uint(sdf_data.x * 255);
-    sdf_type  = sdf_and_grad_type & 0xf;
-    grad_type = sdf_and_grad_type >> 4;
+    tex_idx   = (vert.sdf_data >> 0) & 0xff;
+    sdf_type  = (vert.sdf_data >> 8) & 0x0f;
+    grad_type = (vert.sdf_data >> 12) & 0x0f;
     feather   = sdf_data.z * 1;
 
     float stroke_width_px =      sdf_data.w * 16;
@@ -464,20 +462,10 @@ void main()
     {
         vec2 p2  = p * p_scale;
 
-        vec2 pt0, pt1;
-        pt0.x = -px_scale + stroke_width * 2;
-        pt1.x = px_scale - stroke_width * 2;
-
-        if (buffer_idx_range == 0)
-        {
-            pt0.y = 1 - stroke_width * 2;
-            pt1.y = -1 + stroke_width * 2;
-        }
-        else
-        {
-            pt0.y = -1 + stroke_width * 2;
-            pt1.y = 1 - stroke_width * 2;
-        }
+        vec2 pt0 = vec2(-px_scale + stroke_width * 2,
+            (buffer_idx_range == 0) ?  (1 - stroke_width * 2) : (-1 + stroke_width * 2));
+        vec2 pt1 = vec2(px_scale - stroke_width * 2,
+            (buffer_idx_range == 0) ? (-1 + stroke_width * 2) : (1 - stroke_width * 2));
 
         float d  = sdSegment(p2, pt0, pt1) - stroke_width;
         d        = smoothstep(feather, 0, d + feather * 0.5);
@@ -636,20 +624,10 @@ void main()
         {
             vec2 p3 = p * p_scale; // Don't apply translate to this positon
 
-            vec2 pt0, pt1;
-            pt0.x = -px_scale + stroke_width * 2;
-            pt1.x = px_scale - stroke_width * 2;
-
-            if (buffer_idx_range == 0)
-            {
-                pt0.y = 1 - stroke_width * 2;
-                pt1.y = -1 + stroke_width * 2;
-            }
-            else
-            {
-                pt0.y = -1 + stroke_width * 2;
-                pt1.y = 1 - stroke_width * 2;
-            }
+            vec2 pt0 = vec2(-px_scale + stroke_width * 2,
+                (buffer_idx_range == 0) ?  (1 - stroke_width * 2) : (-1 + stroke_width * 2));
+            vec2 pt1 = vec2(px_scale - stroke_width * 2,
+                (buffer_idx_range == 0) ? (-1 + stroke_width * 2) : (1 - stroke_width * 2));
 
             pt0 -= xy_offset * p_scale;
             pt1 -= xy_offset * p_scale;
