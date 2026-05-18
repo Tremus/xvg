@@ -1935,8 +1935,14 @@ const XVGTextLayout* xvg_create_text_layout(
     XVG_ASSERT(font_size < 128);
     if (font_size < 6) // Can text be smaller than 6?
         font_size = 6;
+
+    // 0 puts all multiline text on the same line. 0 is a good default for most things, so make 0 1...
+    if (_line_height <= 0)
+        _line_height = 1;
+
     if (text_end == NULL)
         text_end = text_start + strlen(text_start);
+
     const size_t text_len           = text_end - text_start;
     const int    backingScaleFactor = xcl->xvg->backingScaleFactor;
 
