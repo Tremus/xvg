@@ -720,6 +720,10 @@ void main() {
 	gl_Position = vec4(pos.x, -pos.y, 0, 1);
 
     colour = unpackUnorm4x8(obj.colour).abgr;
+#ifdef XVG_TEXT_MULTICHANNEL
+    // Pre multiply alpha
+    colour.rgb *= colour.a;
+#endif
 }
 @end
 
@@ -780,18 +784,15 @@ in vec2 texcoord;
 in flat uint atlas_idx;
 in flat vec4 colour;
 
-layout(location=0, index=0) out vec4 frag_colour;
-layout(location=0, index=1) out vec4 blend_weights;
+layout(location=0, index=0) out vec4 src;
+layout(location=0, index=1) out vec4 src1;
 
 void main() {
     // Normalised coords are too unreliable, even if the texture atlas is very small and when we're using
     // 'nearest neighbour' samplers, they really aren't great at finding the sample we want...
     ivec2 itexcoord = ivec2(texcoord);
 
-    // vec3 pixel_coverages = texelFetch(sampler2D(fs_xvg_text_tex, fs_xvg_text_smp), itexcoord, 0).rgb;
-    // vec3 pixel_coverages = texture(sampler2D(fs_xvg_text_tex, fs_xvg_text_smp), texcoord).rgb;
-
-    // NOTE: if we start text_idx from 1, then its really obvious when we haven't initialised it
+    // NOTE: if we start atlas_idx from 1, then its really obvious when we haven't initialised it
     vec4 pixel_coverages = vec4(0);
     if (atlas_idx == 1)
         pixel_coverages = texelFetch(sampler2D(fs_xvg_text_atlas1, fs_xvg_text_smp), itexcoord, 0);
@@ -810,9 +811,8 @@ void main() {
     if (atlas_idx == 8)
         pixel_coverages = texelFetch(sampler2D(fs_xvg_text_atlas8, fs_xvg_text_smp), itexcoord, 0);
 
-
-    frag_colour = colour * vec4(pixel_coverages.rgb, 1);
-	blend_weights = vec4(colour.a * pixel_coverages.rgb, colour.a);
+    src = colour * vec4(pixel_coverages.rgb, 1);
+	src1 = vec4(colour.a * pixel_coverages.rgb, colour.a);
 }
 @end
 
