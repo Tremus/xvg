@@ -1932,9 +1932,11 @@ const XVGTextLayout* xvg_create_text_layout(
         return &stub;
 
     XVG_ASSERT(font_size > 0);
-    XVG_ASSERT(font_size < 128);
+    XVG_ASSERT(font_size < (XVG_ATLAS_HEIGHT / 2));
     if (font_size < 6) // Can text be smaller than 6?
         font_size = 6;
+    if (font_size > (XVG_ATLAS_HEIGHT / 2) - 1)
+        font_size = (XVG_ATLAS_HEIGHT / 2) - 1;
 
     // 0 puts all multiline text on the same line. 0 is a good default for most things, so make 0 1...
     if (_line_height <= 0)
