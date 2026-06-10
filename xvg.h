@@ -409,7 +409,7 @@ typedef struct XVGCommandListRange
 XVGCommandListRange xvg_command_list_pop_begin(XVGCommandList* xcl);
 XVGCommandListRange xvg_command_list_pop_end(XVGCommandList* xcl, XVGCommandListRange* range);
 void                xvg_command_list_join(XVGCommandList* xcl, XVGCommandListRange* range);
-void                xvg_command_list_range_scale_opacity(XVGCommandList* xcl, XVGCommandListRange* range, float opacity);
+void xvg_command_list_range_scale_opacity(XVGCommandList* xcl, const XVGCommandListRange* range, float opacity);
 
 void xvg_begin_frame(XVG*);
 void xvg_end_frame(XVG*);
@@ -951,8 +951,11 @@ void xvg_command_list_join(XVGCommandList* xcl, XVGCommandListRange* range)
     xcl->frame.last_command_idx = range->end_idx;
 }
 
-void xvg_command_list_range_scale_opacity(XVGCommandList* xcl, XVGCommandListRange* range, float opacity)
+void xvg_command_list_range_scale_opacity(XVGCommandList* xcl, const XVGCommandListRange* range, float opacity)
 {
+    if (opacity >= 1)
+        return;
+
     int cmd_idx        = (int)(range->begin_num_commands + 1);
     int inf_protection = 0;
     while (cmd_idx > 0 && cmd_idx < XVG_ARRLEN(xcl->commands) && inf_protection++ < XVG_ARRLEN(xcl->commands))
