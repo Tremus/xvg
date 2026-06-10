@@ -324,6 +324,7 @@ typedef struct XVGCommand
         XVGCommandCustom      custom;
     };
 
+    // "Link" to next item, using an index rather than a pointer
     int next_idx;
 } XVGCommand;
 
@@ -371,6 +372,7 @@ typedef struct XVGCommandList
 #define XVG_TEXT_CAPACITY 1024
 #endif
 
+    // Intrusive linked list of commands. Items use indexes rather than pointers
     XVGCommand commands[XVG_COMMANDS_CAPACITY];
     sg_pass    passes[XVG_PASS_CAPACITY];
 
@@ -407,6 +409,7 @@ typedef struct XVGCommandListRange
 XVGCommandListRange xvg_command_list_pop_begin(XVGCommandList* xcl);
 XVGCommandListRange xvg_command_list_pop_end(XVGCommandList* xcl, XVGCommandListRange* range);
 void                xvg_command_list_join(XVGCommandList* xcl, XVGCommandListRange* range);
+void                xvg_command_list_range_scale_opacity(XVGCommandList* xcl, XVGCommandListRange* range, float opacity);
 
 void xvg_begin_frame(XVG*);
 void xvg_end_frame(XVG*);
@@ -946,6 +949,37 @@ void xvg_command_list_join(XVGCommandList* xcl, XVGCommandListRange* range)
     xcl->commands[xcl->frame.last_command_idx].next_idx = range->begin_num_commands + 1;
 
     xcl->frame.last_command_idx = range->end_idx;
+}
+
+void xvg_command_list_range_scale_opacity(XVGCommandList* xcl, XVGCommandListRange* range, float opacity)
+{
+    int cmd_idx        = (int)(range->begin_num_commands + 1);
+    int inf_protection = 0;
+    while (cmd_idx > 0 && cmd_idx < XVG_ARRLEN(xcl->commands) && inf_protection++ < XVG_ARRLEN(xcl->commands))
+    {
+        XVGCommand* cmd = xcl->commands + cmd_idx;
+        if (cmd->type == XVG_CMD_DRAW)
+        {
+            XVGCommandDraw* draw = &cmd->draw;
+            for (int i = draw->shape_buffer_start; i < draw->shape_buffer_end; i++)
+            {
+                xvg_shape_t*  shape = &xcl->shapes[i];
+                unsigned char a1    = (unsigned char)((float)(shape->colour1 & 0xFF) * opacity);
+                unsigned char a2    = (unsigned char)((float)(shape->colour2 & 0xFF) * opacity);
+                shape->colour1      = xvg_colour_set_alpha_u8(shape->colour1, a1);
+                shape->colour2      = xvg_colour_set_alpha_u8(shape->colour2, a2);
+            }
+            for (int i = draw->text_buffer_start; i < draw->text_buffer_end; i++)
+            {
+                xvg_text_t*   t = &xcl->text[i];
+                unsigned char a = (unsigned char)((float)(t->colour & 0xFF) * opacity);
+                t->colour       = xvg_colour_set_alpha_u8(t->colour, a);
+            }
+        }
+        if (cmd_idx == (int)range->end_idx)
+            break;
+        cmd_idx = cmd->next_idx;
+    }
 }
 
 // ███████╗██╗  ██╗ █████╗ ██████╗ ███████╗███████╗
