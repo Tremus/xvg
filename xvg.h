@@ -459,17 +459,9 @@ XVGGradient xvg_make_shadow(
 
 // x/y/w/h are the coords of the image getting sampled
 // Saturation can be applied to change the colour of the image, inluding the opacity ie. ffffff7f (50% opacity)
-XVGGradient
-xvg_make_image_fill(sg_view texture, sg_sampler sampler, uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t sat);
+XVGGradient xvg_make_image_fill(sg_view texture, sg_sampler sampler, int x, int y, int w, int h, uint32_t sat);
 
-void xvg_gradient_apply_image(
-    XVGGradient* grad,
-    sg_view      texture,
-    sg_sampler   sampler,
-    uint32_t     x,
-    uint32_t     y,
-    uint32_t     w,
-    uint32_t     h);
+void xvg_gradient_apply_image(XVGGradient* grad, sg_view texture, sg_sampler sampler, int x, int y, int w, int h);
 
 // Hard corners, edges snapped to pixels. Horizontal and vertical only
 void xvg_draw_solid_rectangle(XVGCommandList*, int x, int y, int width, int height, unsigned col);
@@ -1032,15 +1024,15 @@ XVGGradient xvg_make_shadow(
     };
 }
 
-void xvg_gradient_apply_image(
-    XVGGradient* grad,
-    sg_view      texture,
-    sg_sampler   sampler,
-    uint32_t     x,
-    uint32_t     y,
-    uint32_t     w,
-    uint32_t     h)
+void xvg_gradient_apply_image(XVGGradient* grad, sg_view texture, sg_sampler sampler, int x, int y, int w, int h)
 {
+    x += (0x7fff);
+    y += (0x7fff);
+    XVG_ASSERT(x >= 0 && x < (0xffff)); // required for bit hacks
+    XVG_ASSERT(y >= 0 && y < (0xffff));
+    XVG_ASSERT(w >= 0 && w < (0xffff));
+    XVG_ASSERT(h >= 0 && h < (0xffff));
+
     grad->xy      = x | (y << 16);
     grad->wh      = w | (h << 16);
     grad->texture = texture;
@@ -1048,11 +1040,18 @@ void xvg_gradient_apply_image(
 }
 
 // x/y/w/h are the coords of the image getting sampled
-XVGGradient
-xvg_make_image_fill(sg_view texture, sg_sampler sampler, uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t sat)
+XVGGradient xvg_make_image_fill(sg_view texture, sg_sampler sampler, int x, int y, int w, int h, uint32_t sat)
 {
     XVG_ASSERT(texture.id);
     XVG_ASSERT(sampler.id);
+
+    x += (0x7fff);
+    y += (0x7fff);
+    XVG_ASSERT(x >= 0 && x < (0xffff)); // required for bit hacks
+    XVG_ASSERT(y >= 0 && y < (0xffff));
+    XVG_ASSERT(w >= 0 && w < (0xffff));
+    XVG_ASSERT(h >= 0 && h < (0xffff));
+
     return (XVGGradient){
         .xy      = x | (y << 16),
         .wh      = w | (h << 16),
