@@ -402,10 +402,14 @@ void xvg_command_custom(XVGCommandList*, void* uptr, XVGCustomFunc func, const c
 // You use this can reorder items in the list
 typedef struct XVGCommandListRange
 {
-    unsigned begin_idx;
-    unsigned end_idx;
-    unsigned begin_num_commands;
+    uint16_t begin_idx;
+    uint16_t end_idx;
+    uint16_t begin_num_commands;
 } XVGCommandListRange;
+_Static_assert(
+    XVG_COMMANDS_CAPACITY < 0xffff,
+    "Your capacity exceeds the range of U16, which is required by XVGCommandListRange. First consider better "
+    "optimising your program. If that's not possible, change the above U16s to U32s");
 XVGCommandListRange xvg_command_list_pop_begin(XVGCommandList* xcl);
 XVGCommandListRange xvg_command_list_pop_end(XVGCommandList* xcl, XVGCommandListRange* range);
 void                xvg_command_list_join(XVGCommandList* xcl, XVGCommandListRange* range);
