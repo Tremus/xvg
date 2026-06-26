@@ -1953,15 +1953,13 @@ XVGTextLayoutRow* _xvg_begin_row(XVG* xcl, XVGTextLayout* layout, int cursor_x_p
     return rows;
 }
 
-void _xvg_end_row(XVGTextLayout* layout, int ymin, int ymax)
+void _xvg_end_row(XVGTextLayout* layout, int ymin, int ymax, int xmax)
 {
     // XVG_ASSERT(layout->num_rows > 0);
     if (layout->num_rows > 0)
     {
-        XVGTextLayoutRow* rows   = xvg_layout_get_rows(layout);
-        XVGGlyphLayout*   glyphs = xvg_layout_get_glyphs(layout);
-        XVGGlyphLayout*   g      = &glyphs[layout->num_glyphs - 1];
-        XVGTextLayoutRow* row    = &rows[layout->num_rows - 1];
+        XVGTextLayoutRow* rows = xvg_layout_get_rows(layout);
+        XVGTextLayoutRow* row  = &rows[layout->num_rows - 1];
 
         if (row->begin_idx != layout->num_glyphs)
         {
@@ -1969,7 +1967,7 @@ void _xvg_end_row(XVGTextLayout* layout, int ymin, int ymax)
             row->end_idx = layout->num_glyphs;
             row->ymin    = ymin;
             row->ymax    = ymax;
-            row->xmax    = g->x + g->rect.w + g->rect.bearing_x;
+            row->xmax    = xmax;
         }
     }
 }
@@ -2078,7 +2076,7 @@ const XVGTextLayout* xvg_create_text_layout(
         {
             layout_xmax = xm_maxi(layout_xmax, line_xmax);
 
-            _xvg_end_row(layout, line_ymin, line_ymax);
+            _xvg_end_row(layout, line_ymin, line_ymax, line_xmax);
 
             prev_glyph_idx = 0;
             line_xmin      = 0;
@@ -2146,7 +2144,7 @@ const XVGTextLayout* xvg_create_text_layout(
                 // Break word
                 XVG_ASSERT(layout->num_rows);
                 XVG_ASSERT(num_glyphs_at_last_space <= layout->num_glyphs);
-                _xvg_end_row(layout, line_ymin, line_ymax);
+                _xvg_end_row(layout, line_ymin, line_ymax, line_xmax);
                 rows = _xvg_begin_row(xcl->xvg, layout, 0, CursorY >> 6);
 
                 XVGTextLayoutRow* prev_row    = &rows[layout->num_rows - 2];
@@ -2169,17 +2167,6 @@ const XVGTextLayout* xvg_create_text_layout(
 
                     end_idx           = prev_row->end_idx;
                     prev_row->end_idx = num_glyphs_at_last_space;
-                    if (num_glyphs_at_last_space > 0)
-                    {
-                        XVGGlyphLayout* break_glyph = &glyphs[num_glyphs_at_last_space - 1];
-                        int             xmax = break_glyph->x + break_glyph->rect.w + break_glyph->rect.bearing_x;
-                        XVG_ASSERT(xmax == line_max_at_last_space);
-                    }
-                    prev_row->xmax = line_max_at_last_space;
-
-                    XVG_ASSERT(prev_row->begin_idx <= prev_row->end_idx);
-                    XVG_ASSERT(prev_row->xmax <= break_row_x_px);
-                    layout_xmax = xm_maxi(layout_xmax, prev_row->xmax);
                 }
                 else
                 {
@@ -2187,6 +2174,24 @@ const XVGTextLayout* xvg_create_text_layout(
                     // doesn't get claimed by both rows.
                     prev_row->end_idx = layout->num_glyphs - 1;
                 }
+
+                // prev_row's true xmax may have changed due to line breaking + space trimming. It must be recalculated
+                int prev_row_xmax = 0;
+                if (prev_row->begin_idx < prev_row->end_idx)
+                {
+                    XVGGlyphLayout* g = &glyphs[prev_row->end_idx - 1];
+                    prev_row_xmax     = g->x + g->rect.w + g->rect.bearing_x;
+                }
+                prev_row->xmax = prev_row_xmax;
+
+                if (num_glyphs_at_last_space >= 0)
+                {
+                    XVG_ASSERT(prev_row->xmax == line_max_at_last_space);
+                }
+
+                XVG_ASSERT(prev_row->begin_idx <= prev_row->end_idx);
+                XVG_ASSERT(prev_row->xmax <= break_row_x_px);
+                layout_xmax = xm_maxi(layout_xmax, prev_row->xmax);
 
                 current_row->begin_idx =
                     num_glyphs_at_last_space >= 0 ? num_glyphs_at_last_space : layout->num_glyphs - 1;
@@ -2196,7 +2201,7 @@ const XVGTextLayout* xvg_create_text_layout(
                 for (int i = current_row->begin_idx; i < layout->num_glyphs; i++)
                 {
                     XVGGlyphLayout* g = &glyphs[i];
-                    if (g->rect.header.glyph_index == 0)
+                    if (g->rect.w == (space_advance >> 6) && g->rect.bearing_x == 0 && g->rect.h == 0)
                         current_row->begin_idx++;
                     else
                         break;
@@ -2244,7 +2249,7 @@ const XVGTextLayout* xvg_create_text_layout(
         }
     }
     layout_xmax = xm_maxi(layout_xmax, line_xmax);
-    _xvg_end_row(layout, line_ymin, line_ymax);
+    _xvg_end_row(layout, line_ymin, line_ymax, line_xmax);
     layout->xmax = layout_xmax;
 
     layout->total_height       = (CursorY + (m->ascender - m->descender)) >> 6;
