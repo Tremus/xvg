@@ -691,15 +691,22 @@ void xvg_draw_text_ex(
     XVGDecoration   decoration,
     uint32_t        colour,
     float           break_width,
-    float           line_height);
+    float           line_height_scale);
 
+// 'start_x' is the x position (in the same coordinate space as 'break_width') that the first row's
+// cursor begins at. This lets a run of text that continues mid-line (eg. after a differently-styled
+// run on the same visual line) know how much room is left before it must wrap. Rows after the first
+// always begin at x=0, ie. the left edge of the wrapping column. Pass 0 if the run always begins a
+// fresh row/column.
+// 'line_height_scale' scales the font size. Passing 0 defaults the scale to 1.0f (100%)
 const XVGTextLayout* xvg_create_text_layout(
     XVGCommandList* xcl,
     const char*     text_start,
     const char*     text_end,
     unsigned        font_size,
+    float           start_x,
     float           break_width,
-    float           _line_height);
+    float           line_height_scale);
 static void xvg_release_text_layout(XVGCommandList* xcl, const XVGTextLayout* layout)
 {
     linked_arena_release(xcl->arena, layout);
@@ -1926,7 +1933,7 @@ bool _xvg_push_glyph(XVGCommandList* xcl, int pen_x, int pen_y, const XVGAtlasRe
     return should_push;
 }
 
-XVGTextLayoutRow* _xvg_begin_row(XVG* xcl, XVGTextLayout* layout, int cursor_y_px)
+XVGTextLayoutRow* _xvg_begin_row(XVG* xcl, XVGTextLayout* layout, int cursor_x_px, int cursor_y_px)
 {
     XVG_ASSERT(layout->num_rows <= layout->cap_rows);
     XVGTextLayoutRow* rows = xvg_layout_get_rows(layout);
@@ -1941,7 +1948,8 @@ XVGTextLayoutRow* _xvg_begin_row(XVG* xcl, XVGTextLayout* layout, int cursor_y_p
         rows = next_rows;
     }
 
-    rows[layout->num_rows++] = (XVGTextLayoutRow){.begin_idx = layout->num_glyphs, .cursor_y_px = cursor_y_px};
+    rows[layout->num_rows++] =
+        (XVGTextLayoutRow){.begin_idx = layout->num_glyphs, .xmin = cursor_x_px, .cursor_y_px = cursor_y_px};
     return rows;
 }
 
@@ -1972,8 +1980,9 @@ const XVGTextLayout* xvg_create_text_layout(
     const char*     text_start,
     const char*     text_end,
     unsigned        font_size,
+    float           start_x,
     float           break_width,
-    float           _line_height)
+    float           line_height_scale)
 {
     static const XVGTextLayout stub = {0};
     XVGFontSlot*               sl   = _xvg_get_current_font_slot(xcl->xvg);
@@ -1989,8 +1998,8 @@ const XVGTextLayout* xvg_create_text_layout(
         font_size = (XVG_ATLAS_HEIGHT / 2) - 1;
 
     // 0 puts all multiline text on the same line. 0 is a good default for most things, so make 0 1...
-    if (_line_height <= 0)
-        _line_height = 1;
+    if (line_height_scale <= 0)
+        line_height_scale = 1;
 
     if (text_end == NULL)
         text_end = text_start + strlen(text_start);
@@ -1999,6 +2008,7 @@ const XVGTextLayout* xvg_create_text_layout(
     const int    backingScaleFactor = xcl->xvg->backingScaleFactor;
 
     font_size   *= backingScaleFactor;
+    start_x     *= backingScaleFactor;
     break_width *= backingScaleFactor;
 
     XVGTextLayout* layout = linked_arena_alloc_clear(xcl->arena, sizeof(*layout));
@@ -2017,7 +2027,7 @@ const XVGTextLayout* xvg_create_text_layout(
 
     const FT_Size_Metrics* m = &face->size->metrics;
 
-    int64_t line_height = (double)m->height * _line_height;
+    int64_t line_height = (double)m->height * line_height_scale;
 
     layout->ascender    = m->ascender >> 6;
     layout->descender   = m->descender >> 6;
@@ -2031,17 +2041,22 @@ const XVGTextLayout* xvg_create_text_layout(
     const int64_t break_row_x_px = break_row_x >> 6;
     XVG_ASSERT(break_row_x >= 0);
 
-    int64_t CursorX = 0, CursorY = 0;
+    // 'start_x' offsets the cursor on the first row. Successive rows wrap to x=0
+    int64_t CursorX   = (int64_t)(start_x * 64);
+    int64_t CursorY   = 0;
     int     line_xmax = 0, line_xmin = 0;
     int     line_ymax = 0, line_ymin = 0;
     int     layout_xmax = 0;
 
-    rows                       = _xvg_begin_row(xcl->xvg, layout, 0);
+    rows                       = _xvg_begin_row(xcl->xvg, layout, CursorX >> 6, CursorY >> 6);
     const char* iter           = text_start;
     unsigned    prev_glyph_idx = 0;
 
-    int     num_glyphs_at_last_space = 0;
-    int64_t CursorX_at_last_space    = 0;
+    // -1 means "no space seen yet in this row" — must NOT be 0, since a space can legitimately be the
+    // very first glyph of a row (eg. a run of text that begins with a literal space), which is itself a
+    // valid break point at glyph index 0.
+    int     num_glyphs_at_last_space = -1;
+    int64_t CursorX_at_last_space    = -1;
     int     line_max_at_last_space   = 0;
     while (iter < text_end)
     {
@@ -2071,14 +2086,14 @@ const XVGTextLayout* xvg_create_text_layout(
             line_ymin      = 0;
             line_ymax      = 0;
 
-            num_glyphs_at_last_space = 0;
-            CursorX_at_last_space    = 0;
+            num_glyphs_at_last_space = -1;
+            CursorX_at_last_space    = -1;
             line_max_at_last_space   = 0;
 
             CursorX  = 0;
             CursorY += line_height;
 
-            rows = _xvg_begin_row(xcl->xvg, layout, CursorY >> 6);
+            rows = _xvg_begin_row(xcl->xvg, layout, CursorX >> 6, CursorY >> 6);
             break;
         }
         default:
@@ -2123,7 +2138,8 @@ const XVGTextLayout* xvg_create_text_layout(
             bool should_break_word = line_xmax > break_row_x_px;
             if (should_break_word)
             {
-                CursorX  = CursorX_at_last_space > 0 ? (CursorX - CursorX_at_last_space - space_advance) : 0;
+                CursorX  = CursorX_at_last_space >= 0 ? (CursorX - CursorX_at_last_space - space_advance)
+                                                      : glyph.rect.advance_x;
                 CursorY += line_height;
                 XVG_ASSERT(CursorX >= 0);
 
@@ -2131,7 +2147,7 @@ const XVGTextLayout* xvg_create_text_layout(
                 XVG_ASSERT(layout->num_rows);
                 XVG_ASSERT(num_glyphs_at_last_space <= layout->num_glyphs);
                 _xvg_end_row(layout, line_ymin, line_ymax);
-                rows = _xvg_begin_row(xcl->xvg, layout, CursorY >> 6);
+                rows = _xvg_begin_row(xcl->xvg, layout, 0, CursorY >> 6);
 
                 XVGTextLayoutRow* prev_row    = &rows[layout->num_rows - 2];
                 XVGTextLayoutRow* current_row = &rows[layout->num_rows - 1];
@@ -2142,25 +2158,39 @@ const XVGTextLayout* xvg_create_text_layout(
                 line_ymin      = 0;
                 line_ymax      = 0;
 
+                // 'num_glyphs_at_last_space' is the index of the most recent space seen in this row, which
+                // is itself a valid break point even when that index is 0 (eg. a run of text that begins
+                // with a literal space). Only a negative value means "no space was seen at all", in which
+                // case we hard-break right before the glyph that overflowed instead of indexing glyphs[-1].
                 int end_idx = -1;
-                if (num_glyphs_at_last_space > 0)
+                if (num_glyphs_at_last_space >= 0)
                 {
                     XVG_ASSERT(layout->num_rows >= 2);
-                    XVGGlyphLayout* break_glyph = &glyphs[num_glyphs_at_last_space - 1];
 
                     end_idx           = prev_row->end_idx;
                     prev_row->end_idx = num_glyphs_at_last_space;
-                    int xmax          = break_glyph->x + break_glyph->rect.w + break_glyph->rect.bearing_x;
-                    XVG_ASSERT(xmax == line_max_at_last_space);
+                    if (num_glyphs_at_last_space > 0)
+                    {
+                        XVGGlyphLayout* break_glyph = &glyphs[num_glyphs_at_last_space - 1];
+                        int             xmax = break_glyph->x + break_glyph->rect.w + break_glyph->rect.bearing_x;
+                        XVG_ASSERT(xmax == line_max_at_last_space);
+                    }
                     prev_row->xmax = line_max_at_last_space;
 
                     XVG_ASSERT(prev_row->begin_idx <= prev_row->end_idx);
                     XVG_ASSERT(prev_row->xmax <= break_row_x_px);
                     layout_xmax = xm_maxi(layout_xmax, prev_row->xmax);
                 }
+                else
+                {
+                    // No space anywhere in this row: hard-break before the glyph that overflowed so it
+                    // doesn't get claimed by both rows.
+                    prev_row->end_idx = layout->num_glyphs - 1;
+                }
 
-                current_row->begin_idx = num_glyphs_at_last_space;
-                current_row->end_idx   = end_idx > 0 ? end_idx : layout->num_glyphs;
+                current_row->begin_idx =
+                    num_glyphs_at_last_space >= 0 ? num_glyphs_at_last_space : layout->num_glyphs - 1;
+                current_row->end_idx = end_idx > 0 ? end_idx : layout->num_glyphs;
 
                 // Skip spaces in new line
                 for (int i = current_row->begin_idx; i < layout->num_glyphs; i++)
@@ -2187,7 +2217,8 @@ const XVGTextLayout* xvg_create_text_layout(
 
                         // recalculate row stats
                         line_ymax = xm_maxi(line_ymax, g->rect.bearing_y);
-                        line_ymin = xm_mini(line_ymin, g->rect.bearing_y - glyph.rect.h);
+                        // line_ymin = xm_mini(line_ymin, g->rect.bearing_y - glyph.rect.h);
+                        line_ymin = xm_mini(line_ymin, g->rect.bearing_y - g->rect.h);
                         line_xmax = xm_maxi(line_xmax, g->x + g->rect.w + g->rect.bearing_x);
                     }
                 }
@@ -2245,7 +2276,7 @@ const XVGTextLayout* xvg_create_text_layout(
     // XVG_ASSERT(layout->num_glyphs);
     if (layout->num_glyphs)
     {
-        XVG_ASSERT(rows[0].begin_idx < rows[0].end_idx);
+        XVG_ASSERT(rows[0].begin_idx <= rows[0].end_idx);
     }
 
     return layout;
@@ -2323,15 +2354,20 @@ void xvg_draw_text_layout(
             bool did_push = _xvg_push_glyph(xcl, row_x_left + gpos->x, text_y + gpos->y, &gpos->rect, colour);
         }
 
-        if (dec)
+        // Rows can end up empty (eg. a row whose only content was a leading space that got dropped after
+        // a wrap) — skip decoration for those rather than drawing a degenerate/inverted-width rectangle.
+        if (dec && row->end_idx > row->begin_idx)
         {
             int y_baseline         = y * backingScaleFactor + row->cursor_y_px + baseline_delta_y;
             int underline_delta    = (abs(layout->descender) >> 2);
             int strikethough_delta = (abs(layout->ascender) >> 2);
             int thicc              = 1; // TODO: increase thickness based on font size?
 
-            int x_dec           = row_x_left / backingScaleFactor;
-            int w_dec           = row->xmax / backingScaleFactor;
+            // 'row->xmin' is the leading offset baked into this row's glyphs (eg. when a run continues
+            // mid-line via 'start_x' in xvg_create_text_layout). Without it the decoration would always
+            // start at the call's nominal x/column edge rather than where the text actually begins.
+            int x_dec           = (row_x_left + row->xmin) / backingScaleFactor;
+            int w_dec           = (row->xmax - row->xmin) / backingScaleFactor;
             int y_underline     = (y_baseline + underline_delta) / backingScaleFactor;
             int y_strikethrough = (y_baseline - strikethough_delta) / backingScaleFactor;
 
@@ -2364,7 +2400,7 @@ void xvg_draw_text_ex(
     LINKED_ARENA_LEAK_DETECT_BEGIN(xcl->arena);
 
     const XVGTextLayout* layout =
-        xvg_create_text_layout(xcl, text_start, text_end, font_size, break_width, line_height);
+        xvg_create_text_layout(xcl, text_start, text_end, font_size, 0, break_width, line_height);
     xvg_draw_text_layout(xcl, layout, x, y, alignment, decoration, colour);
     xvg_release_text_layout(xcl, layout);
 
