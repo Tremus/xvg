@@ -2370,7 +2370,7 @@ void xvg_draw_text_layout(
             // "looks good to me". Similar to what chrome looks like. Better than using the decender at some font sizes
             int underline_delta    = (int)(font_size * 0.2);
             int strikethough_delta = (abs(layout->ascender) >> 2);
-            int thicc              = (float)xm_maxf(1, font_size * 0.1f);
+            int thicc              = (float)xm_maxf(1, font_size * 0.1f / backingScaleFactor);
 
             // 'row->xmin' is the leading offset baked into this row's glyphs (eg. when a run continues
             // mid-line via 'start_x' in xvg_create_text_layout). Without it the decoration would always
@@ -2516,20 +2516,19 @@ void xvg_init(XVG* xcl)
     // fallback_img
     static const uint32_t pixel_white = 0xffffffff;
 
-    xcl->fallback_img      = sg_make_image(&(sg_image_desc){
-             .width              = 1,
-             .height             = 1,
-             .pixel_format       = SG_PIXELFORMAT_RGBA8,
-             .data.mip_levels[0] = {
-                 .ptr  = &pixel_white,
-                 .size = sizeof(pixel_white),
-        }});
+    xcl->fallback_img      = sg_make_image(&(sg_image_desc){.width              = 1,
+                                                            .height             = 1,
+                                                            .pixel_format       = SG_PIXELFORMAT_RGBA8,
+                                                            .data.mip_levels[0] = {
+                                                                .ptr  = &pixel_white,
+                                                                .size = sizeof(pixel_white),
+                                                       }});
     xcl->fallback_img_view = sg_make_view(&(sg_view_desc){.texture = xcl->fallback_img});
 
-    xcl->pip_shapes = sg_make_pipeline(&(sg_pipeline_desc){
-        .shader    = sg_make_shader(_xvg_shapes_shader_desc(sg_query_backend())),
-        .colors[0] = BLEND_DEFAULT,
-        .label     = XVG_LABEL("xcl-shapes-pipeline")});
+    xcl->pip_shapes =
+        sg_make_pipeline(&(sg_pipeline_desc){.shader    = sg_make_shader(_xvg_shapes_shader_desc(sg_query_backend())),
+                                             .colors[0] = BLEND_DEFAULT,
+                                             .label     = XVG_LABEL("xcl-shapes-pipeline")});
 
     xcl->pip_text = sg_make_pipeline(&(sg_pipeline_desc){
 #if defined(XVG_TEXT_MULTICHANNEL)
@@ -2640,11 +2639,10 @@ void xvg_end_frame(XVG* xcl)
             sg_view_desc desc = sg_query_view_desc(atlas->img_view);
             sg_update_image(
                 desc.texture.image,
-                &(sg_image_data){
-                    .mip_levels[0] = {
-                        .ptr  = atlas->img_data,
-                        .size = XVG_ATLAS_HEIGHT * XVG_ATLAS_ROW_STRIDE,
-                    }});
+                &(sg_image_data){.mip_levels[0] = {
+                                     .ptr  = atlas->img_data,
+                                     .size = XVG_ATLAS_HEIGHT * XVG_ATLAS_ROW_STRIDE,
+                                 }});
             atlas->dirty = false;
         }
     }
