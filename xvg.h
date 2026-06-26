@@ -212,6 +212,8 @@ typedef struct XVGTextLayout
 
     int num_rows, cap_rows;
     int num_glyphs, cap_glyphs;
+    // Offset in bytes of the rows and glyphs, relative to the XVGTextLayout pointer
+    // Designed to be easily cachable in an arena allocator
     int offset_rows;
     int offset_glyphs;
 } XVGTextLayout;
@@ -226,6 +228,13 @@ static XVGGlyphLayout* xvg_layout_get_glyphs(const XVGTextLayout* l)
     return (XVGGlyphLayout*)((char*)l + l->offset_glyphs);
 }
 static void xvg_layout_set_glyphs(XVGTextLayout* l, XVGGlyphLayout* g) { l->offset_glyphs = ((char*)g - (char*)l); }
+
+// Get total size in bytes actually used by XVGTextLayout
+size_t xvg_get_text_layout_size(const XVGTextLayout* layout);
+// Copy a text layout into a tightly packed contiguous block. Does not bounds check
+void xvg_copy_text_layout(const XVGTextLayout* layout, void*);
+// The safe way to duplicate a text layout. Combines xvg_get_text_layout_size & xvg_copy_text_layout
+XVGTextLayout* xvg_copy_text_layout_with_arena(const XVGTextLayout* layout, LinkedArena* arena);
 
 typedef struct XVG
 {
@@ -1948,7 +1957,7 @@ void _xvg_end_row(XVGTextLayout* layout, int ymin, int ymax)
 
         if (row->begin_idx != layout->num_glyphs)
         {
-            XVG_ASSERT(ymax != 0 || ymin != 0);
+            // XVG_ASSERT(ymax != 0 || ymin != 0);
             row->end_idx = layout->num_glyphs;
             row->ymin    = ymin;
             row->ymax    = ymax;
@@ -2034,7 +2043,7 @@ const XVGTextLayout* xvg_create_text_layout(
     int     num_glyphs_at_last_space = 0;
     int64_t CursorX_at_last_space    = 0;
     int     line_max_at_last_space   = 0;
-    while (iter != text_end)
+    while (iter < text_end)
     {
         union XVGCodepoint
         {
@@ -2042,7 +2051,10 @@ const XVGTextLayout* xvg_create_text_layout(
             char str[4]; // helps to view codepoint in a debugger
         };
         union XVGCodepoint cp = {0};
-        iter                  = utf8codepoint(iter, &cp.i32);
+
+        const char* prev_iter = iter; // unused. just for debugging...
+
+        iter = utf8codepoint(iter, &cp.i32);
 
         switch (cp.i32)
         {
@@ -2073,7 +2085,7 @@ const XVGTextLayout* xvg_create_text_layout(
         {
             // char     c         = cp;
             unsigned glyph_idx = FT_Get_Char_Index(face, cp.i32);
-            XVG_ASSERT(glyph_idx != 0);
+            // XVG_ASSERT(glyph_idx != 0);
 
             XVGGlyphLayout glyph = {
                 .rect = _xvg_get_atlas_rect(xcl->xvg, glyph_idx, font_size),
@@ -2228,8 +2240,13 @@ const XVGTextLayout* xvg_create_text_layout(
 #endif
 
     XVG_ASSERT(layout->num_rows);
-    XVG_ASSERT(layout->num_glyphs);
-    XVG_ASSERT(rows[0].begin_idx < rows[0].end_idx);
+    // perhaps this assertion isn't great, in case the user passes a string like "\n"?
+    // This results in an empty row layout, but no actual glyphs to be rendered...
+    // XVG_ASSERT(layout->num_glyphs);
+    if (layout->num_glyphs)
+    {
+        XVG_ASSERT(rows[0].begin_idx < rows[0].end_idx);
+    }
 
     return layout;
 }
@@ -2352,6 +2369,32 @@ void xvg_draw_text_ex(
     xvg_release_text_layout(xcl, layout);
 
     LINKED_ARENA_LEAK_DETECT_END(xcl->arena);
+}
+
+size_t xvg_get_text_layout_size(const XVGTextLayout* layout)
+{
+    return sizeof(XVGTextLayout) + (size_t)layout->num_rows * sizeof(XVGTextLayoutRow) +
+           (size_t)layout->num_glyphs * sizeof(XVGGlyphLayout);
+}
+
+void xvg_copy_text_layout(const XVGTextLayout* layout, void* data)
+{
+    XVGTextLayout* copy = data;
+    memcpy(copy, layout, sizeof(*copy));
+    copy->offset_rows   = sizeof(XVGTextLayout);
+    copy->offset_glyphs = sizeof(XVGTextLayout) + (size_t)layout->num_rows * sizeof(XVGTextLayoutRow);
+    memcpy(xvg_layout_get_rows(copy), xvg_layout_get_rows(layout), (size_t)layout->num_rows * sizeof(XVGTextLayoutRow));
+    memcpy(
+        xvg_layout_get_glyphs(copy),
+        xvg_layout_get_glyphs(layout),
+        (size_t)layout->num_glyphs * sizeof(XVGGlyphLayout));
+}
+XVGTextLayout* xvg_copy_text_layout_with_arena(const XVGTextLayout* layout, LinkedArena* arena)
+{
+    size_t         total_size = xvg_get_text_layout_size(layout);
+    XVGTextLayout* copy       = linked_arena_alloc(arena, total_size);
+    xvg_copy_text_layout(layout, copy);
+    return copy;
 }
 
 void xvg_draw_text(
