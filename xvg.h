@@ -2828,6 +2828,14 @@ void xvg_command_list_end_frame(XVGCommandList* xcl, int window_width, int windo
         cmd_idx = cmd->next_idx;
         ncommands++;
     }
+
+    // Oh dear, you've run out of capacity! Expect clipped content
+    // #define your own array capacity macros for these arrays
+    XVG_ASSERT(xcl->frame.num_commands < XVG_ARRLEN(xcl->commands));
+    XVG_ASSERT(xcl->frame.num_passes < XVG_ARRLEN(xcl->passes));
+    XVG_ASSERT(xcl->frame.num_shapes < XVG_ARRLEN(xcl->shapes));
+    XVG_ASSERT(xcl->frame.num_line_segments < XVG_ARRLEN(xcl->line_segments));
+    XVG_ASSERT(xcl->frame.num_text < XVG_ARRLEN(xcl->text));
 }
 
 #endif // XVG_IMPL
