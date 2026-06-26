@@ -2363,10 +2363,14 @@ void xvg_draw_text_layout(
         // a wrap) — skip decoration for those rather than drawing a degenerate/inverted-width rectangle.
         if (dec && row->end_idx > row->begin_idx)
         {
-            int y_baseline         = y * backingScaleFactor + row->cursor_y_px + baseline_delta_y;
-            int underline_delta    = (abs(layout->descender) >> 2);
+            float font_size = glyphs->rect.header.font_size;
+
+            int y_baseline = y * backingScaleFactor + row->cursor_y_px + baseline_delta_y;
+            // int underline_delta  = (abs(layout->descender) >> 2);
+            // "looks good to me". Similar to what chrome looks like. Better than using the decender at some font sizes
+            int underline_delta    = (int)(font_size * 0.2);
             int strikethough_delta = (abs(layout->ascender) >> 2);
-            int thicc              = 1; // TODO: increase thickness based on font size?
+            int thicc              = (float)xm_maxf(1, font_size * 0.1f);
 
             // 'row->xmin' is the leading offset baked into this row's glyphs (eg. when a run continues
             // mid-line via 'start_x' in xvg_create_text_layout). Without it the decoration would always
