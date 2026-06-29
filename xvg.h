@@ -180,8 +180,14 @@ typedef struct XVGAtlas
     bool           full;
 } XVGAtlas;
 
-typedef struct XVGFont
+typedef union XVGFont
 {
+    struct
+    {
+        uint8_t  _slot_num; // idx + 1
+        uint8_t  _italic;
+        uint16_t _weight;
+    };
     int id;
 } XVGFont;
 
@@ -674,13 +680,14 @@ XVGFont xvg_add_font_from_path(XVG*, const char* font_filepath);
 // Same as above, except takes a file buffer, and now you're responsible for freeing the memory
 // Note this memory must remain valid until you call xvg_deinit()
 XVGFont xvg_add_font_from_memory(XVG*, const void* font_data, size_t font_datalen);
-// If the active font is a variable type font, sets the weight ('wght')
-// 'weight': A range between 100-900. eg. 400 (regular)
-// TODO: support italics ('ital')
-bool xvg_set_font_weight(XVG*, int weight);
 
 // Sets active font to draw and create layouts with
 void xvg_set_font(XVG*, XVGFont);
+
+// If the active font is a variable type font, sets the weight ('wght')
+// 'weight': A range between 100-900. eg. 400 (regular)
+// TODO: support italics ('ital')
+bool xvg_set_font_ex(XVG*, XVGFont font, int weight);
 
 void xvg_draw_text(
     XVGCommandList* xcl,
@@ -1693,9 +1700,12 @@ XVGFont _xvg_add_font_from_memory_impl(XVG* xcl, const void* data, size_t datale
             err                 = FT_Get_Advance(sl->ft_face, space_char, FT_LOAD_NO_SCALE, &advance);
             XVG_ASSERT(err == 0);
             sl->space_advance = advance;
-        }
 
-        return (XVGFont){i + 1};
+            XVGFont font   = {0};
+            font._slot_num = i + 1;
+            font._weight   = sl->wght_index >= 0 && sl->coords != NULL ? (sl->coords[sl->wght_index] >> 16) : 0;
+            return font;
+        }
     }
     return (XVGFont){0};
 }
@@ -1718,21 +1728,19 @@ XVGFont xvg_add_font_from_memory(XVG* xvg, const void* data, size_t datalen)
     return _xvg_add_font_from_memory_impl(xvg, data, datalen, owned);
 }
 
-void xvg_set_font(XVG* xvg, XVGFont font)
+void xvg_set_font(XVG* xvg, XVGFont font) { xvg_set_font_ex(xvg, font, font._weight); }
+
+bool xvg_set_font_ex(XVG* xvg, XVGFont font, int weight)
 {
-    int next_font_idx = font.id - 1;
+    int next_font_idx = font._slot_num - 1;
     if (next_font_idx < 0)
         next_font_idx = 0;
     if (next_font_idx >= XVG_ARRLEN(xvg->fonts))
         next_font_idx = XVG_ARRLEN(xvg->fonts) - 1;
     xvg->current_font_idx = next_font_idx;
-    xvg_set_font_weight(xvg, 400);
-}
 
-bool xvg_set_font_weight(XVG* xvg, int weight)
-{
     XVGFontSlot* sl = &xvg->fonts[xvg->current_font_idx];
-    if (sl->ft_face && sl->wght_index >= 0)
+    if (sl->coords && sl->wght_index >= 0)
     {
         FT_Fixed coord = (FT_Fixed)weight << 16;
         if (sl->coords[sl->wght_index] == coord)
@@ -2069,7 +2077,7 @@ const XVGTextLayout* xvg_create_text_layout(
 
     const size_t   text_len           = text_end - text_start;
     const int      backingScaleFactor = xcl->xvg->backingScaleFactor;
-    const unsigned font_weight        = sl->wght_index >= 0 && sl->coords != NULL ? sl->coords[sl->wght_index] : 0;
+    const unsigned font_weight = sl->wght_index >= 0 && sl->coords != NULL ? (sl->coords[sl->wght_index] >> 16) : 0;
 
     font_size   *= backingScaleFactor;
     start_x     *= backingScaleFactor;
