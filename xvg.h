@@ -717,6 +717,9 @@ void xvg_draw_text_ex(
 // always begin at x=0, ie. the left edge of the wrapping column. Pass 0 if the run always begins a
 // fresh row/column.
 // 'line_height_scale' scales the font size. Passing 0 defaults the scale to 1.0f (100%)
+// 'should_clip_ellipsis' truncates the current row instead of wrapping it once it would exceed
+// 'break_width': trailing glyphs are removed and replaced with three '.' glyphs, and no further
+// text is laid out after that point (even text after an explicit '\n').
 const XVGTextLayout* xvg_create_text_layout(
     XVGCommandList* xcl,
     const char*     text_start,
@@ -724,7 +727,8 @@ const XVGTextLayout* xvg_create_text_layout(
     unsigned        font_size,
     float           start_x,
     float           break_width,
-    float           line_height_scale);
+    float           line_height_scale,
+    bool            should_clip_ellipsis);
 static void xvg_release_text_layout(XVGCommandList* xcl, const XVGTextLayout* layout)
 {
     linked_arena_release(xcl->arena, layout);
@@ -2053,7 +2057,8 @@ const XVGTextLayout* xvg_create_text_layout(
     unsigned        font_size,
     float           start_x,
     float           break_width,
-    float           line_height_scale)
+    float           line_height_scale,
+    bool            should_clip_ellipsis)
 {
     static const XVGTextLayout stub = {0};
     XVGFontSlot*               sl   = _xvg_get_current_font_slot(xcl->xvg);
@@ -2208,7 +2213,59 @@ const XVGTextLayout* xvg_create_text_layout(
             prev_glyph_idx  = glyph_idx;
 
             bool should_break_word = line_xmax > break_row_x_px;
-            if (should_break_word)
+            if (should_break_word && should_clip_ellipsis)
+            {
+                unsigned      dot_glyph_idx     = FT_Get_Char_Index(face, '.');
+                XVGAtlasRect  dot_rect          = _xvg_get_atlas_rect(xcl->xvg, dot_glyph_idx, font_size, font_weight);
+                const int64_t ellipsis_width_px = (dot_rect.advance_x * 3) >> 6;
+
+                const short row_begin_idx = rows[layout->num_rows - 1].begin_idx;
+
+                // Pop glyphs from the tail of this row until the remaining content plus the ellipsis fits.
+                while (layout->num_glyphs > row_begin_idx)
+                {
+                    const XVGGlyphLayout* last      = &glyphs[layout->num_glyphs - 1];
+                    const int             last_edge = last->x + last->rect.w + last->rect.bearing_x;
+                    if (last_edge + ellipsis_width_px <= break_row_x_px)
+                        break;
+
+                    CursorX -= last->rect.advance_x;
+                    layout->num_glyphs--;
+                }
+
+                // Recompute this row's bounds from what's left (removing the tail can only shrink them).
+                line_xmax = 0;
+                line_ymax = 0;
+                line_ymin = 0;
+                for (int i = row_begin_idx; i < layout->num_glyphs; i++)
+                {
+                    const XVGGlyphLayout* g = &glyphs[i];
+                    line_xmax               = xm_maxi(line_xmax, g->x + g->rect.w + g->rect.bearing_x);
+                    line_ymax               = xm_maxi(line_ymax, g->rect.bearing_y);
+                    line_ymin               = xm_mini(line_ymin, g->rect.bearing_y - g->rect.h);
+                }
+
+                // If 'break_row_x_px' is too narrow to fit all three dots (eg. an extremely small
+                // break_width), stop adding dots once they'd overflow rather than drawing all three
+                // regardless — the ellipsis itself gets clipped instead of the row overflowing.
+                for (int i = 0; i < 3 && layout->num_glyphs < layout->cap_glyphs; i++)
+                {
+                    XVGGlyphLayout dot       = {.rect = dot_rect, .x = (int)(CursorX >> 6), .y = (int)(CursorY >> 6)};
+                    const int      dot_right = dot.x + dot.rect.w + dot.rect.bearing_x;
+                    if (dot_right > break_row_x_px)
+                        break;
+
+                    line_xmax = xm_maxi(line_xmax, dot_right);
+                    line_ymax = xm_maxi(line_ymax, dot.rect.bearing_y);
+                    line_ymin = xm_mini(line_ymin, dot.rect.bearing_y - dot.rect.h);
+
+                    glyphs[layout->num_glyphs++]  = dot;
+                    CursorX                      += dot.rect.advance_x;
+                }
+
+                iter = text_end; // stop the outer while loop; nothing is laid out past the ellipsis
+            }
+            else if (should_break_word)
             {
                 CursorX  = CursorX_at_last_space >= 0 ? (CursorX - CursorX_at_last_space - space_advance)
                                                       : glyph.rect.advance_x;
@@ -2483,7 +2540,7 @@ void xvg_draw_text_ex(
     LINKED_ARENA_LEAK_DETECT_BEGIN(xcl->arena);
 
     const XVGTextLayout* layout =
-        xvg_create_text_layout(xcl, text_start, text_end, font_size, 0, break_width, line_height);
+        xvg_create_text_layout(xcl, text_start, text_end, font_size, 0, break_width, line_height, false);
     xvg_draw_text_layout(xcl, layout, x, y, alignment, decoration, colour);
     xvg_release_text_layout(xcl, layout);
 
