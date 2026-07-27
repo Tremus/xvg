@@ -161,7 +161,7 @@ void main() {
     float stroke_width_px =      sdf_data.w * 16;
     stroke_width = px_scale * 2 * stroke_width_px / vw;
 
-    vec2 texcoords_xy = unpackUnorm2x16(vert.texcoords_xy) * vec2(65535);
+    vec2 texcoords_xy = unpackUnorm2x16(vert.texcoords_xy) * vec2(65535) - vec2(32767);
     vec2 texcoords_rb = unpackUnorm2x16(vert.texcoords_wh) * vec2(65535) + texcoords_xy;
 
     vec2 texture_size = tex_idx == 1 ? u_texture_size_1 : tex_idx == 2 ? u_texture_size_2 : tex_idx == 3 ? u_texture_size_3 : tex_idx == 4 ? u_texture_size_4 : vec2(1);
