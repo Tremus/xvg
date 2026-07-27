@@ -1568,8 +1568,8 @@ void _xvg_draw_line_plot_ex(
 
     xvg_shape_t* shape = _xvg_get_shape(xcl);
     *shape             = (xvg_shape_t){
-                    .topleft             = {x, y - stroke_width * 0.25f},
-                    .bottomright         = {x + width, y + height + stroke_width * 0.25},
+                    .topleft             = {x, y - stroke_width * 0.5f},
+                    .bottomright         = {x + width, y + height + stroke_width},
                     .sdf_data            = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, feather, stroke_width),
                     .borderradius_arcpie = _xvg_compress_border_radius(crop_br, crop_br, crop_br, crop_br),
                     .buffer_idx_range    = range.u32,
