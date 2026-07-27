@@ -158,7 +158,9 @@ void main() {
     grad_type = (vert.sdf_data >> 12) & 0x0f;
     feather   = sdf_data.z * 1;
 
-    float stroke_width_px =      sdf_data.w * 16;
+    // sdf_data.w was packed as (stroke_width * 16) into a raw byte (4.4 fixed point), not a
+    // true unorm value, so it must be decoded as byte / 16, not (byte / 255) * 16.
+    float stroke_width_px = sdf_data.w * (255.0 / 16.0);
     stroke_width = px_scale * 2 * stroke_width_px / vw;
 
     vec2 texcoords_xy = unpackUnorm2x16(vert.texcoords_xy) * vec2(65535) - vec2(32767);
@@ -391,8 +393,12 @@ void main()
     {
         vec2 b = p_scale;
         float d = sdRoundBox(p * p_scale, b, borderradius_arcpie);
-        float outer = smoothstep(feather, 0, d + feather * 0.5);
-        float inner = smoothstep(feather, 0, d + stroke_width + feather * 0.5);
+        // Clamp the AA band to the stroke width itself: if feather stays fixed while the
+        // stroke gets thinner than it, the outer/inner ramps overlap and the stroke never
+        // reaches full opacity (and bleeds into neighbouring pixels).
+        float aa = min(feather, stroke_width);
+        float outer = smoothstep(aa, 0, d + aa * 0.5);
+        float inner = smoothstep(aa, 0, d + stroke_width + aa * 0.5);
         shape = outer - inner;
     }
     if (sdf_type == XVG_SHAPE_CIRCLE_FILL)
@@ -404,8 +410,9 @@ void main()
     if (sdf_type == XVG_SHAPE_CIRCLE_STROKE)
     {
         float d = 1 - length(p);
-        float outer = smoothstep(0, feather, d + feather * 0.5);
-        float inner = smoothstep(0, feather, d + feather * 0.5 - stroke_width);
+        float aa = min(feather, stroke_width);
+        float outer = smoothstep(0, aa, d + aa * 0.5);
+        float inner = smoothstep(0, aa, d + aa * 0.5 - stroke_width);
         shape = outer - inner;
     }
     if (sdf_type == XVG_SHAPE_TRIANGLE_FILL)
@@ -421,8 +428,9 @@ void main()
         vec2 p2 = vec2(p.x * borderradius_arcpie.x - p.y * borderradius_arcpie.y,
                        p.x * borderradius_arcpie.y + p.y * borderradius_arcpie.x);
         float d = sdEquilateralTriangle(p2, 0.86);
-        float outer = smoothstep(feather, 0, d + feather * 0.5);
-        float inner = smoothstep(feather, 0, d + feather * 0.5 + stroke_width);
+        float aa = min(feather, stroke_width);
+        float outer = smoothstep(aa, 0, d + aa * 0.5);
+        float inner = smoothstep(aa, 0, d + aa * 0.5 + stroke_width);
         shape = outer - inner;
     }
     if (sdf_type == XVG_SHAPE_PIE_FILL)
@@ -438,8 +446,9 @@ void main()
         vec2 p2 = vec2(p.x * borderradius_arcpie.x - p.y * borderradius_arcpie.y,
                        p.x * borderradius_arcpie.y + p.y * borderradius_arcpie.x);
         float d = sdPie(p2, borderradius_arcpie.zw, 1.0);
-        float outer = smoothstep(feather, 0, d + feather * 0.5);
-        float inner = smoothstep(feather, 0, d + feather * 0.5 + stroke_width);
+        float aa = min(feather, stroke_width);
+        float outer = smoothstep(aa, 0, d + aa * 0.5);
+        float inner = smoothstep(aa, 0, d + aa * 0.5 + stroke_width);
         shape = outer - inner;
     }
     if (sdf_type == XVG_SHAPE_ARC_ROUND_STROKE)
@@ -447,7 +456,10 @@ void main()
         vec2 p2 = vec2(p.x * borderradius_arcpie.x - p.y * borderradius_arcpie.y,
                        p.x * borderradius_arcpie.y + p.y * borderradius_arcpie.x);
         float d = sdArc(p2, borderradius_arcpie.zw, 1.0 - stroke_width, stroke_width);
-        float outer = smoothstep(feather, 0, d + feather * 0.5);
+        // sdArc already encodes distance-to-centerline minus half-thickness, so this only
+        // needs feather <= 2*stroke_width to hit full opacity; clamp for very thin strokes.
+        float aa = min(feather, stroke_width * 2);
+        float outer = smoothstep(aa, 0, d + aa * 0.5);
         shape = outer;
     }
     if (sdf_type == XVG_SHAPE_ARC_BUTT_STROKE)
@@ -455,7 +467,8 @@ void main()
         vec2 p2 = vec2(p.x * borderradius_arcpie.x - p.y * borderradius_arcpie.y,
                        p.x * borderradius_arcpie.y + p.y * borderradius_arcpie.x);
         float d = sdRing(p2, borderradius_arcpie.zw, 1.0 - stroke_width, stroke_width*2);
-        float outer = smoothstep(feather, 0, d + feather * 0.5);
+        float aa = min(feather, stroke_width * 2);
+        float outer = smoothstep(aa, 0, d + aa * 0.5);
         shape = outer;
     }
     if (sdf_type == XVG_SHAPE_LINE_ROUND)
@@ -468,7 +481,8 @@ void main()
             (buffer_idx_range == 0) ? (-1 + stroke_width * 2) : (1 - stroke_width * 2));
 
         float d  = sdSegment(p2, pt0, pt1) - stroke_width;
-        d        = smoothstep(feather, 0, d + feather * 0.5);
+        float aa = min(feather, stroke_width * 2);
+        d        = smoothstep(aa, 0, d + aa * 0.5);
         shape = d;
     }
     if (sdf_type == XVG_SHAPE_LINE_PLOT)
@@ -515,7 +529,7 @@ void main()
         float d2 = sdSegment(p_iso, b, c);
         float d  = min(d1, d2);
 
-        float f = feather;
+        float f = min(feather, stroke_width);
 
         shape = smoothstep(f, 0, d - stroke_width * 0.5 + f * 0.5);
         shape = clamp(shape, 0, 1);
