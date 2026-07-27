@@ -156,10 +156,8 @@ void main() {
     tex_idx   = (vert.sdf_data >> 0) & 0xff;
     sdf_type  = (vert.sdf_data >> 8) & 0x0f;
     grad_type = (vert.sdf_data >> 12) & 0x0f;
-    feather   = sdf_data.z * 1;
+    feather   = 2 / vh;
 
-    // sdf_data.w was packed as (stroke_width * 16) into a raw byte (4.4 fixed point), not a
-    // true unorm value, so it must be decoded as byte / 16, not (byte / 255) * 16.
     float stroke_width_px = sdf_data.w * (255.0 / 16.0);
     stroke_width = px_scale * 2 * stroke_width_px / vw;
 

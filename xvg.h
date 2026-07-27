@@ -774,18 +774,13 @@ static unsigned xvg_colour_set_alpha_f32(unsigned col, float alpha)
 #define XVG_FREE(ptr)        free(ptr)
 #endif
 
-uint32_t _xvg_compress_sdf_data(
-    unsigned      tex_idx,
-    XVGShapeType  shape_type,
-    XVGColourType col_type,
-    float         feather,
-    float         stroke_width)
+uint32_t _xvg_compress_sdf_data(unsigned tex_idx, XVGShapeType shape_type, XVGColourType col_type, float stroke_width)
 {
     XVG_ASSERT(stroke_width >= 0 && stroke_width < 16);
     xvecu compressed = {
         .r = tex_idx,
         .g = shape_type | (col_type << 4),
-        .b = (uint8_t)(xm_minf(255, feather * 255)),
+        .b = 0, // TODO: this slot is now free. The stroke width could use it to increase its maximum range
         .a = (uint8_t)(xm_minf(255, stroke_width * 16)),
     };
     return compressed.u32;
@@ -1179,13 +1174,12 @@ void xvg_draw_circle_with_gradient(
     unsigned tex_idx = _xvg_set_bound_texture(xcl, &grad);
 
     XVGShapeType shape_type = stroke_width > 0 ? XVG_SHAPE_CIRCLE_STROKE : XVG_SHAPE_CIRCLE_FILL;
-    float        feather    = 2.0f / radius_px;
 
     xvg_shape_t* shape = _xvg_get_shape(xcl);
     *shape             = (xvg_shape_t){
                     .topleft      = {cx - radius_px, cy - radius_px},
                     .bottomright  = {cx + radius_px, cy + radius_px},
-                    .sdf_data     = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, feather, stroke_width),
+                    .sdf_data     = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, stroke_width),
                     .colour1      = grad.colour1,
                     .colour2      = grad.colour2,
                     .gradient_a   = {grad.gradient_a[0], grad.gradient_a[1]},
@@ -1209,7 +1203,7 @@ void xvg_draw_solid_rectangle_with_gradient(XVGCommandList* xcl, int x, int y, i
     *shape             = (xvg_shape_t){
                     .topleft             = {x, y},
                     .bottomright         = {x + width, y + height},
-                    .sdf_data            = _xvg_compress_sdf_data(tex_idx, XVG_SHAPE_RECTANGLE, grad.type, 0, 0),
+                    .sdf_data            = _xvg_compress_sdf_data(tex_idx, XVG_SHAPE_RECTANGLE, grad.type, 0),
                     .borderradius_arcpie = 0,
                     .colour1             = grad.colour1,
                     .colour2             = grad.colour2,
@@ -1242,14 +1236,11 @@ void xvg_draw_rectangle_with_gradient_ex(
     unsigned     tex_idx    = _xvg_set_bound_texture(xcl, &grad);
     XVGShapeType shape_type = stroke > 0 ? XVG_SHAPE_ROUNDED_RECTANGLE_STROKE : XVG_SHAPE_ROUNDED_RECTANGLE_FILL;
 
-    // float feather = 4.0f / xm_minf(w, h);
-    float feather = 4.0f / h;
-
     xvg_shape_t* shape = _xvg_get_shape(xcl);
     *shape             = (xvg_shape_t){
                     .topleft             = {x, y},
                     .bottomright         = {x + w, y + h},
-                    .sdf_data            = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, feather, stroke),
+                    .sdf_data            = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, stroke),
                     .borderradius_arcpie = _xvg_compress_border_radius(br_tr, br_br, br_tl, br_bl),
 
                     .colour1      = grad.colour1,
@@ -1300,13 +1291,12 @@ void xvg_draw_triangle_with_gradient(
 {
     unsigned     tex_idx    = _xvg_set_bound_texture(xcl, &grad);
     XVGShapeType shape_type = stroke > 0 ? XVG_SHAPE_TRIANGLE_STROKE : XVG_SHAPE_TRIANGLE_FILL;
-    float        feather    = 4.0f / xm_minf(w, h);
 
     xvg_shape_t* shape = _xvg_get_shape(xcl);
     *shape             = (xvg_shape_t){
                     .topleft             = {x, y},
                     .bottomright         = {x + w, y + h},
-                    .sdf_data            = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, feather, stroke),
+                    .sdf_data            = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, stroke),
                     .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(rotate, 0),
                     .colour1             = grad.colour1,
                     .colour2             = grad.colour2,
@@ -1343,7 +1333,6 @@ void xvg_draw_pie_with_gradient(
 {
     unsigned     tex_idx      = _xvg_set_bound_texture(xcl, &grad);
     XVGShapeType shape_type   = stroke_width > 0 ? XVG_SHAPE_PIE_STROKE : XVG_SHAPE_PIE_FILL;
-    float        feather      = 2.0f / radius_px;
     float        angle_range  = end_turn - start_turn;
     float        angle_rotate = (end_turn + start_turn);
 
@@ -1351,7 +1340,7 @@ void xvg_draw_pie_with_gradient(
     *shape             = (xvg_shape_t){
                     .topleft             = {cx - radius_px, cy - radius_px},
                     .bottomright         = {cx + radius_px, cy + radius_px},
-                    .sdf_data            = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, feather, stroke_width),
+                    .sdf_data            = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, stroke_width),
                     .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(angle_rotate * 0.5f, angle_range * 0.5f),
                     .colour1             = grad.colour1,
                     .colour2             = grad.colour2,
@@ -1393,7 +1382,6 @@ void xvg_draw_arc_with_gradient(
     unsigned tex_idx = _xvg_set_bound_texture(xcl, &grad);
 
     XVGShapeType shape_type = butt ? XVG_SHAPE_ARC_BUTT_STROKE : XVG_SHAPE_ARC_ROUND_STROKE;
-    float        feather    = 2.0f / radius_px;
 
     float turn_low  = xm_minf(start_turn, end_turn);
     float turn_high = xm_maxf(start_turn, end_turn);
@@ -1413,7 +1401,7 @@ void xvg_draw_arc_with_gradient(
     *shape             = (xvg_shape_t){
                     .topleft             = {cx - radius_px, cy - radius_px},
                     .bottomright         = {cx + radius_px, cy + radius_px},
-                    .sdf_data            = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, feather, stroke_width * 0.5f),
+                    .sdf_data            = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, stroke_width * 0.5f),
                     .borderradius_arcpie = _xvg_compress_arc_rotate_and_range(rotate_turns, range_turns),
                     .colour1             = grad.colour1,
                     .colour2             = grad.colour2,
@@ -1453,8 +1441,6 @@ void xvg_draw_line_round_with_gradient(
     float yt = xm_minf(y0, y1) - stroke;
     float yb = xm_maxf(y0, y1) + stroke;
 
-    float feather = 4.0f / (yb - yt);
-
     xvecu stroke_offsets = {
         .r = x0 > x1 ? 255 : 0,
         .g = y0 > y1 ? 255 : 0,
@@ -1470,7 +1456,7 @@ void xvg_draw_line_round_with_gradient(
     *shape             = (xvg_shape_t){
                     .topleft             = {xl, yt},
                     .bottomright         = {xr, yb},
-                    .sdf_data            = _xvg_compress_sdf_data(0, XVG_SHAPE_LINE_ROUND, grad.type, feather, stroke * 0.5f),
+                    .sdf_data            = _xvg_compress_sdf_data(0, XVG_SHAPE_LINE_ROUND, grad.type, stroke * 0.5f),
                     .borderradius_arcpie = stroke_offsets.u32,
                     .colour1             = grad.colour1,
                     .colour2             = grad.colour2,
@@ -1552,15 +1538,13 @@ void _xvg_draw_line_plot_ex(
     XVGShapeType    shape_type,
     XVGBufferRange  range)
 {
-    float feather = 4.0f / height;
-
     unsigned tex_idx = _xvg_set_bound_texture(xcl, &grad);
 
     xvg_shape_t* shape = _xvg_get_shape(xcl);
     *shape             = (xvg_shape_t){
                     .topleft             = {x, y - stroke_width * 0.5f},
                     .bottomright         = {x + width, y + height + stroke_width},
-                    .sdf_data            = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, feather, stroke_width),
+                    .sdf_data            = _xvg_compress_sdf_data(tex_idx, shape_type, grad.type, stroke_width),
                     .borderradius_arcpie = _xvg_compress_border_radius(crop_br, crop_br, crop_br, crop_br),
                     .buffer_idx_range    = range.u32,
 
