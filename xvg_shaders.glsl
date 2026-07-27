@@ -211,7 +211,7 @@ void main() {
 
         // buffer_idx       = is_right ? range.y : range.x;
         buffer_idx_range = vert.buffer_idx_range;
-        px_inc       = 2.0 / u_size.y;
+        px_inc       = 2.0 / vw;
     }
 
     if (grad_type == XVG_COLOUR_LINEAR_GRADIENT)
@@ -503,18 +503,21 @@ void main()
         line_y_prev        *= stroke_scale;
         line_y_next        *= stroke_scale;
 
-        // build points
-        vec2 a = vec2(p.x - px_inc, line_y_prev);
-        vec2 b = vec2(p.x         , line_y);
-        vec2 c = vec2(p.x + px_inc, line_y_next);
+        // build points, aspect-corrected so distance is isotropic (1 unit == vh*0.5 px on both axes).
+        // Without this, stroke width varies with segment angle since p.x and p.y otherwise represent
+        // different pixel scales (the rect is usually wider than it is tall).
+        vec2 p_iso = p * p_scale;
+        vec2 a = vec2((p.x - px_inc) * px_scale, line_y_prev);
+        vec2 b = vec2( p.x           * px_scale, line_y);
+        vec2 c = vec2((p.x + px_inc) * px_scale, line_y_next);
 
-        float d1 = sdSegment(p, a, b);
-        float d2 = sdSegment(p, b, c);
+        float d1 = sdSegment(p_iso, a, b);
+        float d2 = sdSegment(p_iso, b, c);
         float d  = min(d1, d2);
 
         float f = feather;
 
-        shape = smoothstep(f*0.5, 0, d-stroke_width*0.5 + f*0.5);
+        shape = smoothstep(f, 0, d - stroke_width * 0.5 + f * 0.5);
         shape = clamp(shape, 0, 1);
 
         // Crop with rounded rectange
