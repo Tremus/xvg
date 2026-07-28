@@ -150,7 +150,7 @@ typedef union XVGAtlasRectHeader
 {
     struct
     {
-        uint32_t glyph_index : 32;
+        uint32_t codepoint : 32;
         unsigned font_size : 12;
         unsigned font_weight : 10;
         unsigned atlas_idx : 5;
@@ -1791,7 +1791,7 @@ XVGAtlas* _xvg_get_current_font_atlas(XVG* xcl)
     return xcl->atlases + xcl->current_atlas.idx;
 }
 
-int _xvg_raster_glyph(XVG* xcl, uint32_t glyph_index, unsigned font_size, unsigned font_weight)
+int _xvg_raster_glyph(XVG* xcl, int codepoint, uint32_t glyph_index, unsigned font_size, unsigned font_weight)
 {
     int num_packed = 0;
 
@@ -1852,7 +1852,7 @@ int _xvg_raster_glyph(XVG* xcl, uint32_t glyph_index, unsigned font_size, unsign
             XVG_ASSERT(glyph->bitmap_left >= -128 && glyph->bitmap_left < 127);
             XVG_ASSERT(glyph->bitmap_top >= -128 && glyph->bitmap_top < 127);
             XVGAtlasRect arect       = {0};
-            arect.header.glyph_index = glyph_index;
+            arect.header.codepoint   = codepoint;
             arect.header.font_size   = font_size;
             arect.header.font_weight = font_weight;
             arect.header.font_idx    = (uint8_t)xcl->current_font_idx;
@@ -1916,12 +1916,13 @@ int _xvg_raster_glyph(XVG* xcl, uint32_t glyph_index, unsigned font_size, unsign
 
 // Get cached rect. Rasters the rect to an atlas if not already cached
 // TODO: use fallback fonts. This may require accepting utf32 codepoints to detect language
-XVGAtlasRect _xvg_get_atlas_rect(XVG* xcl, uint32_t glyph_index, unsigned font_size, unsigned font_weight)
+XVGAtlasRect
+_xvg_get_atlas_rect(XVG* xcl, int codepoint, uint32_t glyph_index, unsigned font_size, unsigned font_weight)
 {
     const int num_rects = xarr_len(xcl->atlas_rects);
 
     XVGAtlasRectHeader header_a = {
-        .glyph_index = glyph_index,
+        .codepoint   = codepoint,
         .font_size   = font_size,
         .font_weight = font_weight,
         .font_idx    = xcl->current_font_idx,
@@ -1940,7 +1941,7 @@ XVGAtlasRect _xvg_get_atlas_rect(XVG* xcl, uint32_t glyph_index, unsigned font_s
         }
     }
 
-    int did_raster = _xvg_raster_glyph(xcl, glyph_index, font_size, font_weight);
+    int did_raster = _xvg_raster_glyph(xcl, codepoint, glyph_index, font_size, font_weight);
     if (did_raster)
     {
         XVG_ASSERT(num_rects + 1 == xarr_len(xcl->atlas_rects));
@@ -2154,7 +2155,7 @@ const XVGTextLayout* xvg_create_text_layout(
             // XVG_ASSERT(glyph_idx != 0);
 
             XVGGlyphLayout glyph = {
-                .rect = _xvg_get_atlas_rect(xcl->xvg, glyph_idx, font_size, font_weight),
+                .rect = _xvg_get_atlas_rect(xcl->xvg, cp.i32, glyph_idx, font_size, font_weight),
             };
 
             if (cp.i32 == 32) // space
@@ -2189,8 +2190,8 @@ const XVGTextLayout* xvg_create_text_layout(
             bool should_break_word = line_xmax > break_row_x_px;
             if (should_break_word && should_clip_ellipsis)
             {
-                unsigned      dot_glyph_idx     = FT_Get_Char_Index(face, '.');
-                XVGAtlasRect  dot_rect          = _xvg_get_atlas_rect(xcl->xvg, dot_glyph_idx, font_size, font_weight);
+                unsigned      dot_glyph_idx = FT_Get_Char_Index(face, '.');
+                XVGAtlasRect  dot_rect      = _xvg_get_atlas_rect(xcl->xvg, '.', dot_glyph_idx, font_size, font_weight);
                 const int64_t ellipsis_width_px = (dot_rect.advance_x * 3) >> 6;
 
                 const short row_begin_idx = rows[layout->num_rows - 1].begin_idx;
