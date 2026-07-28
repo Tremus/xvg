@@ -734,6 +734,12 @@ void xvg_draw_text_layout(
     XVGDecoration        dec,
     uint32_t             col);
 
+// ICONS
+// Still a draft API. Reuses the text pipeline. Render directly into the atlas used by text.
+XVGAtlasRect xvg_get_icon_rect(XVG* xcl, unsigned icon_id, unsigned pixel_size, bool* needs_raster);
+bool         _xvg_push_glyph(XVGCommandList* xcl, int pen_x, int pen_y, const XVGAtlasRect* rect, uint32_t colour);
+void _xvg_get_atlas_write_ptr(XVG* xvg, const XVGAtlasRect* in_rect, unsigned char** out_pixels, unsigned* out_stride);
+
 static unsigned xvg_colour_set_alpha_u8(unsigned col, unsigned char alpha) { return (col & 0xffffff00) | alpha; }
 static unsigned xvg_colour_set_alpha_f32(unsigned col, float alpha)
 {
@@ -1791,12 +1797,65 @@ XVGAtlas* _xvg_get_current_font_atlas(XVG* xcl)
     return xcl->atlases + xcl->current_atlas.idx;
 }
 
-int _xvg_raster_glyph(XVG* xcl, int codepoint, uint32_t glyph_index, unsigned font_size, unsigned font_weight)
+int _xvg_try_pack(XVG* xcl, stbrp_rect* rect)
+{
+    XVGAtlas* atlas = _xvg_get_current_font_atlas(xcl);
+
+    int num_packed = stbrp_pack_rects(&xcl->current_atlas.rectpack_ctx, rect, 1);
+
+    bool failed_to_pack = num_packed == 0;
+    if (failed_to_pack)
+    {
+        atlas->full = true;
+
+        bool can_create_new_atlas = (xcl->current_atlas.idx + 1) < XVG_ARRLEN(xcl->atlases);
+        XVG_ASSERT(can_create_new_atlas);
+        if (can_create_new_atlas) // atlas is full
+        {
+            // make new atlas
+            xcl->current_atlas.idx++;
+            xcl->atlases[xcl->current_atlas.idx] = _xvg_create_new_atlas();
+
+            atlas = xcl->atlases + xcl->current_atlas.idx;
+
+            // Clear rectpack
+            memset(&xcl->current_atlas.rectpack_ctx, 0, sizeof(xcl->current_atlas.rectpack_ctx));
+            stbrp_init_target(
+                &xcl->current_atlas.rectpack_ctx,
+                XVG_ATLAS_WIDTH - RECTPACK_PADDING,
+                XVG_ATLAS_HEIGHT - RECTPACK_PADDING,
+                xcl->current_atlas.nodes,
+                xarr_len(xcl->current_atlas.nodes));
+
+            rect->was_packed = 0;
+            num_packed       = stbrp_pack_rects(&xcl->current_atlas.rectpack_ctx, rect, 1);
+            XVG_ASSERT(num_packed == 1);
+        }
+    }
+    return num_packed;
+}
+
+static void
+_xvg_get_atlas_write_ptr(XVG* xvg, const XVGAtlasRect* in_rect, unsigned char** out_pixels, unsigned* out_stride)
+{
+    unsigned idx = in_rect->header.atlas_idx;
+    idx          = xm_clampf(idx, 1, XVG_ARRLEN(xvg->atlases) + 1);
+
+    XVGAtlas*      atlas  = xvg->atlases + idx - 1;
+    unsigned char* dst    = atlas->img_data + in_rect->y * XVG_ATLAS_ROW_STRIDE + in_rect->x * XVG_GLYPH_ATLAS_CHANNELS;
+    unsigned       stride = XVG_ATLAS_ROW_STRIDE;
+    if (out_pixels != NULL)
+        *out_pixels = dst;
+    if (out_stride != NULL)
+        *out_stride = stride;
+}
+
+int _xvg_raster_glyph(XVG* xvg, int codepoint, uint32_t glyph_index, unsigned font_size, unsigned font_weight)
 {
     int num_packed = 0;
 
-    XVGAtlas*    atlas = _xvg_get_current_font_atlas(xcl);
-    XVGFontSlot* sl    = _xvg_get_current_font_slot(xcl);
+    XVGAtlas*    atlas = _xvg_get_current_font_atlas(xvg);
+    XVGFontSlot* sl    = _xvg_get_current_font_slot(xvg);
 
     if (!sl->ft_face || atlas->full)
         return num_packed;
@@ -1813,37 +1872,7 @@ int _xvg_raster_glyph(XVG* xcl, int codepoint, uint32_t glyph_index, unsigned fo
     {
         int        width_pixels = bmp->width / XVG_FT_BITMAP_CHANNELS;
         stbrp_rect rect         = {.w = width_pixels + RECTPACK_PADDING, .h = bmp->rows + RECTPACK_PADDING};
-        num_packed              = stbrp_pack_rects(&xcl->current_atlas.rectpack_ctx, &rect, 1);
-
-        bool failed_to_pack = num_packed == 0;
-        if (failed_to_pack)
-        {
-            atlas->full = true;
-
-            bool can_create_new_atlas = (xcl->current_atlas.idx + 1) < XVG_ARRLEN(xcl->atlases);
-            XVG_ASSERT(can_create_new_atlas);
-            if (can_create_new_atlas) // atlas is full
-            {
-                // make new atlas
-                xcl->current_atlas.idx++;
-                xcl->atlases[xcl->current_atlas.idx] = _xvg_create_new_atlas();
-
-                atlas = xcl->atlases + xcl->current_atlas.idx;
-
-                // Clear rectpack
-                memset(&xcl->current_atlas.rectpack_ctx, 0, sizeof(xcl->current_atlas.rectpack_ctx));
-                stbrp_init_target(
-                    &xcl->current_atlas.rectpack_ctx,
-                    XVG_ATLAS_WIDTH - RECTPACK_PADDING,
-                    XVG_ATLAS_HEIGHT - RECTPACK_PADDING,
-                    xcl->current_atlas.nodes,
-                    xarr_len(xcl->current_atlas.nodes));
-
-                rect       = (stbrp_rect){.w = width_pixels + RECTPACK_PADDING, .h = bmp->rows + RECTPACK_PADDING};
-                num_packed = stbrp_pack_rects(&xcl->current_atlas.rectpack_ctx, &rect, 1);
-                XVG_ASSERT(num_packed == 1);
-            }
-        }
+        num_packed              = _xvg_try_pack(xvg, &rect);
 
         if (num_packed)
         {
@@ -1855,8 +1884,8 @@ int _xvg_raster_glyph(XVG* xcl, int codepoint, uint32_t glyph_index, unsigned fo
             arect.header.codepoint   = codepoint;
             arect.header.font_size   = font_size;
             arect.header.font_weight = font_weight;
-            arect.header.font_idx    = (uint8_t)xcl->current_font_idx;
-            arect.header.atlas_idx   = (uint8_t)xcl->current_atlas.idx + 1;
+            arect.header.font_idx    = (uint8_t)xvg->current_font_idx;
+            arect.header.atlas_idx   = (uint8_t)xvg->current_atlas.idx + 1;
             arect.bearing_x          = glyph->bitmap_left;
             arect.bearing_y          = glyph->bitmap_top;
             arect.x                  = rect.x + RECTPACK_PADDING;
@@ -1872,12 +1901,18 @@ int _xvg_raster_glyph(XVG* xcl, int codepoint, uint32_t glyph_index, unsigned fo
 
             XVG_ASSERT(bmp->pitch >= 0);
 
-            xarr_push(xcl->atlas_rects, arect);
+            xarr_push(xvg->atlas_rects, arect);
+
+            atlas = _xvg_get_current_font_atlas(xvg);
 
             for (int y = 0; y < bmp->rows; y++)
             {
+                unsigned char* dst    = NULL;
+                unsigned       stride = 0;
+                _xvg_get_atlas_write_ptr(xvg, &arect, &dst, &stride);
+
+                dst += stride * y;
 #if defined(XVG_TEXT_SINGLECHANNEL)
-                unsigned char* dst = atlas->img_data + (arect.y + y) * XVG_ATLAS_ROW_STRIDE + arect.x;
                 unsigned char* src = bmp->buffer + y * bmp->pitch;
 
                 unsigned char(*src_view)[512]  = (void*)src;
@@ -1890,8 +1925,6 @@ int _xvg_raster_glyph(XVG* xcl, int codepoint, uint32_t glyph_index, unsigned fo
                 dst_view += 0;
 #endif
 #if defined(XVG_TEXT_MULTICHANNEL)
-                unsigned char* dst =
-                    atlas->img_data + (arect.y + y) * XVG_ATLAS_ROW_STRIDE + (arect.x) * XVG_GLYPH_ATLAS_CHANNELS;
                 unsigned char* src = bmp->buffer + y * bmp->pitch;
 
                 for (int x = 0; x < width_pixels; x++, dst += XVG_GLYPH_ATLAS_CHANNELS, src += XVG_FT_BITMAP_CHANNELS)
@@ -1912,6 +1945,43 @@ int _xvg_raster_glyph(XVG* xcl, int codepoint, uint32_t glyph_index, unsigned fo
     }
 
     return num_packed;
+}
+
+enum
+{
+    XVG_ICON_FONT_IDX_TAG = (1 << 5) - 1, // max value representable in XVGAtlasRectHeader::font_idx (5 bits)
+};
+
+XVGAtlasRect _xvg_reserve_icon_rect(XVG* xvg, unsigned icon_id, unsigned pixel_size)
+{
+    XVGAtlasRect stub  = {0};
+    XVGAtlas*    atlas = _xvg_get_current_font_atlas(xvg);
+    if (atlas->full || pixel_size == 0 || pixel_size > 255)
+        return stub;
+
+    stbrp_rect rect       = {.w = (int)pixel_size + RECTPACK_PADDING, .h = (int)pixel_size + RECTPACK_PADDING};
+    int        num_packed = _xvg_try_pack(xvg, &rect);
+
+    if (!num_packed)
+        return stub;
+
+    XVGAtlasRect arect     = {0};
+    arect.header.codepoint = icon_id;
+    arect.header.font_size = pixel_size;
+    arect.header.font_idx  = XVG_ICON_FONT_IDX_TAG;
+    arect.header.atlas_idx = (uint8_t)xvg->current_atlas.idx + 1;
+    arect.x                = rect.x + RECTPACK_PADDING;
+    arect.y                = rect.y + RECTPACK_PADDING;
+    arect.w                = (uint8_t)pixel_size;
+    arect.h                = (uint8_t)pixel_size;
+    XVG_ASSERT(arect.x + arect.w < XVG_ATLAS_WIDTH);
+    XVG_ASSERT(arect.y + arect.h < XVG_ATLAS_HEIGHT);
+
+    xarr_push(xvg->atlas_rects, arect);
+
+    atlas->dirty = true;
+
+    return arect;
 }
 
 // Get cached rect. Rasters the rect to an atlas if not already cached
@@ -1953,8 +2023,7 @@ _xvg_get_atlas_rect(XVG* xcl, int codepoint, uint32_t glyph_index, unsigned font
     // Note: this stub has a texture view id of 0
     // sokol_gfx should assert in debug mode when trying to bind a texture view with an id of 0
     // In release it should skip all draws using that view. This is our desired behaviour
-    static XVGAtlasRect stub = {0};
-    memset(&stub, 0, sizeof(stub));
+    XVGAtlasRect stub = {0};
     return stub;
 }
 
@@ -1969,7 +2038,7 @@ xvg_text_t* _xvg_get_text(XVGCommandList* xcl)
     return ret;
 }
 
-bool _xvg_push_glyph(XVGCommandList* xcl, int pen_x, int pen_y, const XVGAtlasRect* rect, uint32_t colour)
+bool _xvg_push_glyph(XVGCommandList* xcl, int x, int y, const XVGAtlasRect* rect, uint32_t colour)
 {
     bool should_push = rect->header.atlas_idx != 0;
     if (should_push)
@@ -1977,12 +2046,35 @@ bool _xvg_push_glyph(XVGCommandList* xcl, int pen_x, int pen_y, const XVGAtlasRe
         xvg_text_t* obj = _xvg_get_text(xcl);
         // obj->topleft[0] = pen_x + (int)rect->bearing_x; // If using floating point coords
         // obj->topleft[1] = pen_y - (int)rect->bearing_y;
-        obj->topleft      = _xvg_pack_xy_coord(pen_x + (int)rect->bearing_x, pen_y - (int)rect->bearing_y);
+        obj->topleft      = _xvg_pack_xy_coord(x + (int)rect->bearing_x, y - (int)rect->bearing_y);
         obj->atlas_coords = (xvecu){.r = rect->x, .g = rect->y, .b = rect->w, .a = rect->h}.u32;
         obj->colour       = colour;
         obj->atlas_idx    = rect->header.atlas_idx;
     }
     return should_push;
+}
+
+XVGAtlasRect xvg_get_icon_rect(XVG* xcl, uint32_t icon_id, unsigned pixel_size, bool* needs_raster)
+{
+    *needs_raster = false;
+
+    XVGAtlasRectHeader header_a = {
+        .codepoint = icon_id,
+        .font_size = pixel_size,
+        .font_idx  = XVG_ICON_FONT_IDX_TAG,
+    };
+
+    const int num_rects = xarr_len(xcl->atlas_rects);
+    for (int j = 0; j < num_rects; j++)
+    {
+        XVGAtlasRectHeader header_b = xcl->atlas_rects[j].header;
+        header_b.atlas_idx          = 0;
+        if (header_a.data == header_b.data)
+            return xcl->atlas_rects[j];
+    }
+
+    *needs_raster = true;
+    return _xvg_reserve_icon_rect(xcl, icon_id, pixel_size);
 }
 
 XVGTextLayoutRow* _xvg_begin_row(XVG* xcl, XVGTextLayout* layout, int cursor_x_px, int cursor_y_px)
