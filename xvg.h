@@ -272,6 +272,7 @@ typedef struct XVG
 #endif // XVG_MAX_FONT_SLOTS
 
     // Will default to the first font a user passes the library
+    XVGFont     current_font;
     int         current_font_idx;
     XVGFontSlot fonts[XVG_MAX_FONT_SLOTS];
 
@@ -1723,6 +1724,9 @@ bool xvg_set_font_ex(XVG* xvg, XVGFont font, int weight)
         next_font_idx = XVG_ARRLEN(xvg->fonts) - 1;
     xvg->current_font_idx = next_font_idx;
 
+    if (weight == 0)
+        weight = 500;
+
     XVGFontSlot* sl = &xvg->fonts[xvg->current_font_idx];
     if (sl->coords && sl->wght_index >= 0)
     {
@@ -1735,6 +1739,8 @@ bool xvg_set_font_ex(XVG* xvg, XVGFont font, int weight)
         XVG_ASSERT(err == 0);
         return err == 0;
     }
+
+    xvg->current_font = font;
 
     return false;
 }
