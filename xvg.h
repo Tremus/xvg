@@ -2167,6 +2167,8 @@ const XVGTextLayout* xvg_create_text_layout(
     layout->cap_rows = text_len >> 4;
     if (layout->cap_rows < 8)
         layout->cap_rows = 8;
+    if (layout->cap_glyphs < 32)
+        layout->cap_glyphs = 32;
     XVGTextLayoutRow* rows   = linked_arena_alloc_clear(xcl->arena, sizeof(*rows) * layout->cap_rows);
     XVGGlyphLayout*   glyphs = linked_arena_alloc(xcl->arena, sizeof(*glyphs) * layout->cap_glyphs);
     xvg_layout_set_rows(layout, rows);
