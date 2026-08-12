@@ -2111,14 +2111,10 @@ void _xvg_end_row(XVGTextLayout* layout, int ymin, int ymax, int xmax)
         XVGTextLayoutRow* rows = xvg_layout_get_rows(layout);
         XVGTextLayoutRow* row  = &rows[layout->num_rows - 1];
 
-        if (row->begin_idx != layout->num_glyphs)
-        {
-            // XVG_ASSERT(ymax != 0 || ymin != 0);
-            row->end_idx = layout->num_glyphs;
-            row->ymin    = ymin;
-            row->ymax    = ymax;
-            row->xmax    = xmax;
-        }
+        row->end_idx = layout->num_glyphs;
+        row->ymin    = ymin;
+        row->ymax    = ymax;
+        row->xmax    = xmax;
     }
 }
 
@@ -2458,7 +2454,7 @@ const XVGTextLayout* xvg_create_text_layout(
     _xvg_end_row(layout, line_ymin, line_ymax, line_xmax);
     layout->xmax = layout_xmax;
 
-    layout->total_height       = (CursorY + (m->ascender - m->descender)) >> 6;
+    layout->total_height       = (CursorY + line_height) >> 6;
     int row_0_top              = rows[0].ymax;
     int row_n_1_bottom         = rows[layout->num_rows - 1].ymin - rows[layout->num_rows - 1].cursor_y_px;
     layout->total_height_tight = row_0_top - row_n_1_bottom;
