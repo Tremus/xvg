@@ -1841,8 +1841,7 @@ int _xvg_try_pack(XVG* xcl, stbrp_rect* rect)
     return num_packed;
 }
 
-static void
-_xvg_get_atlas_write_ptr(XVG* xvg, const XVGAtlasRect* in_rect, unsigned char** out_pixels, unsigned* out_stride)
+void _xvg_get_atlas_write_ptr(XVG* xvg, const XVGAtlasRect* in_rect, unsigned char** out_pixels, unsigned* out_stride)
 {
     unsigned idx = in_rect->header.atlas_idx;
     idx          = xm_clampf(idx, 1, XVG_ARRLEN(xvg->atlases) + 1);
@@ -2718,20 +2717,19 @@ void xvg_init(XVG* xcl)
     // fallback_img
     static const uint32_t pixel_white = 0xffffffff;
 
-    xcl->fallback_img      = sg_make_image(&(sg_image_desc){
-             .width              = 1,
-             .height             = 1,
-             .pixel_format       = SG_PIXELFORMAT_RGBA8,
-             .data.mip_levels[0] = {
-                 .ptr  = &pixel_white,
-                 .size = sizeof(pixel_white),
-        }});
+    xcl->fallback_img      = sg_make_image(&(sg_image_desc){.width              = 1,
+                                                            .height             = 1,
+                                                            .pixel_format       = SG_PIXELFORMAT_RGBA8,
+                                                            .data.mip_levels[0] = {
+                                                                .ptr  = &pixel_white,
+                                                                .size = sizeof(pixel_white),
+                                                       }});
     xcl->fallback_img_view = sg_make_view(&(sg_view_desc){.texture = xcl->fallback_img});
 
-    xcl->pip_shapes = sg_make_pipeline(&(sg_pipeline_desc){
-        .shader    = sg_make_shader(_xvg_shapes_shader_desc(sg_query_backend())),
-        .colors[0] = BLEND_DEFAULT,
-        .label     = XVG_LABEL("xcl-shapes-pipeline")});
+    xcl->pip_shapes =
+        sg_make_pipeline(&(sg_pipeline_desc){.shader    = sg_make_shader(_xvg_shapes_shader_desc(sg_query_backend())),
+                                             .colors[0] = BLEND_DEFAULT,
+                                             .label     = XVG_LABEL("xcl-shapes-pipeline")});
 
     xcl->pip_text = sg_make_pipeline(&(sg_pipeline_desc){
 #if defined(XVG_TEXT_MULTICHANNEL)
@@ -2846,11 +2844,10 @@ void xvg_end_frame(XVG* xcl)
             sg_view_desc desc = sg_query_view_desc(atlas->img_view);
             sg_update_image(
                 desc.texture.image,
-                &(sg_image_data){
-                    .mip_levels[0] = {
-                        .ptr  = atlas->img_data,
-                        .size = XVG_ATLAS_HEIGHT * XVG_ATLAS_ROW_STRIDE,
-                    }});
+                &(sg_image_data){.mip_levels[0] = {
+                                     .ptr  = atlas->img_data,
+                                     .size = XVG_ATLAS_HEIGHT * XVG_ATLAS_ROW_STRIDE,
+                                 }});
             atlas->dirty = false;
         }
     }
