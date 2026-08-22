@@ -2717,21 +2717,24 @@ void xvg_init(XVG* xcl)
     // fallback_img
     static const uint32_t pixel_white = 0xffffffff;
 
-    xcl->fallback_img      = sg_make_image(&(sg_image_desc){.width              = 1,
-                                                            .height             = 1,
-                                                            .pixel_format       = SG_PIXELFORMAT_RGBA8,
-                                                            .data.mip_levels[0] = {
-                                                                .ptr  = &pixel_white,
-                                                                .size = sizeof(pixel_white),
-                                                       }});
+    xcl->fallback_img      = sg_make_image(&(sg_image_desc){
+             .width              = 1,
+             .height             = 1,
+             .pixel_format       = SG_PIXELFORMAT_RGBA8,
+             .data.mip_levels[0] = {
+                 .ptr  = &pixel_white,
+                 .size = sizeof(pixel_white),
+        }});
     xcl->fallback_img_view = sg_make_view(&(sg_view_desc){.texture = xcl->fallback_img});
 
-    xcl->pip_shapes =
-        sg_make_pipeline(&(sg_pipeline_desc){.shader    = sg_make_shader(_xvg_shapes_shader_desc(sg_query_backend())),
-                                             .colors[0] = BLEND_DEFAULT,
-                                             .label     = XVG_LABEL("xcl-shapes-pipeline")});
+    xcl->pip_shapes = sg_make_pipeline(&(sg_pipeline_desc){
+        .shader         = sg_make_shader(_xvg_shapes_shader_desc(sg_query_backend())),
+        .primitive_type = SG_PRIMITIVETYPE_TRIANGLE_STRIP,
+        .colors[0]      = BLEND_DEFAULT,
+        .label          = XVG_LABEL("xcl-shapes-pipeline")});
 
     xcl->pip_text = sg_make_pipeline(&(sg_pipeline_desc){
+        .primitive_type = SG_PRIMITIVETYPE_TRIANGLE_STRIP,
 #if defined(XVG_TEXT_MULTICHANNEL)
         .shader    = sg_make_shader(_xvg_text_multichannel_shader_desc(sg_query_backend())),
         .colors[0] = BLEND_DUAL_SOURCE,
@@ -2844,10 +2847,11 @@ void xvg_end_frame(XVG* xcl)
             sg_view_desc desc = sg_query_view_desc(atlas->img_view);
             sg_update_image(
                 desc.texture.image,
-                &(sg_image_data){.mip_levels[0] = {
-                                     .ptr  = atlas->img_data,
-                                     .size = XVG_ATLAS_HEIGHT * XVG_ATLAS_ROW_STRIDE,
-                                 }});
+                &(sg_image_data){
+                    .mip_levels[0] = {
+                        .ptr  = atlas->img_data,
+                        .size = XVG_ATLAS_HEIGHT * XVG_ATLAS_ROW_STRIDE,
+                    }});
             atlas->dirty = false;
         }
     }
@@ -2989,7 +2993,7 @@ void xvg_command_list_end_frame(XVGCommandList* xcl, int window_width, int windo
                 uniforms.u_texture_size_4[1] = img_desc.height;
 
                 sg_apply_uniforms(UB_vs_xvg_shapes_uniforms, &SG_RANGE(uniforms));
-                sg_draw(0, 6 * num_shapes, 1);
+                sg_draw(0, 4, num_shapes);
             }
 
             draw->text_buffer_start = xm_mini(draw->text_buffer_start, XVG_ARRLEN(xcl->text));
@@ -3021,7 +3025,7 @@ void xvg_command_list_end_frame(XVGCommandList* xcl, int window_width, int windo
                 };
                 sg_apply_uniforms(UB_vs_xvg_text_uniforms, &SG_RANGE(uniforms));
 
-                sg_draw(0, 6 * num_text, 1);
+                sg_draw(0, 4, num_text);
             }
             break;
         }

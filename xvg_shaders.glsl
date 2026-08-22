@@ -119,21 +119,17 @@ out flat vec2 gradient_b;
 #define XVG_COLOUR_INNER_SHADOW    5
 
 void main() {
-    uint v_idx = gl_VertexIndex / 6u;
-    uint i_idx = gl_VertexIndex - v_idx * 6;
+    xvg_shape vert = vtx[gl_InstanceIndex + u_storage_buffer_offset];
 
-    xvg_shape vert = vtx[v_idx + u_storage_buffer_offset];
-
+    // Triangle strip, one instance per shape:
     //  0.5f,  0.5f,
     // -0.5f, -0.5f,
     //  0.5f, -0.5f,
     // -0.5f,  0.5f,
-    // 0, 1, 2,
-    // 1, 2, 3,
 
     // Is odd
     bool is_right = (gl_VertexIndex & 1) == 1;
-    bool is_bottom = i_idx >= 2 && i_idx <= 4;
+    bool is_bottom = gl_VertexIndex >= 2;
 
     vec2 pos = vec2(
         is_right  ? vert.bottomright.x : vert.topleft.x,
@@ -699,21 +695,17 @@ out flat uint atlas_idx;
 out flat vec4 colour;
 
 void main() {
-    uint v_idx = gl_VertexIndex / 6u;
-    uint i_idx = gl_VertexIndex - v_idx * 6;
+    xvg_text obj = vtx[gl_InstanceIndex + u_sbo_offset];
 
-    xvg_text obj = vtx[v_idx + u_sbo_offset];
-
+    // Triangle strip, one instance per glyph:
     //  0.5f,  0.5f,
     // -0.5f, -0.5f,
     //  0.5f, -0.5f,
     // -0.5f,  0.5f,
-    // 0, 1, 2,
-    // 1, 2, 3,
 
     // Is odd
     bool is_right = (gl_VertexIndex & 1) == 1;
-    bool is_bottom = i_idx >= 2 && i_idx <= 4;
+    bool is_bottom = gl_VertexIndex >= 2;
 
     vec4 atlas_coords = unpackUnorm4x8(obj.atlas_coords) * 255;
     texcoord = vec2(
