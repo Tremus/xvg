@@ -203,11 +203,9 @@ void main() {
     ||  sdf_type == XVG_SHAPE_LINE_ROUND
     )
     {
-        vec2 range = unpackUnorm2x16(vert.buffer_idx_range) * vec2(65535);
-
-        // buffer_idx       = is_right ? range.y : range.x;
+        vec2 range       = unpackUnorm2x16(vert.buffer_idx_range) * vec2(65535);
         buffer_idx_range = vert.buffer_idx_range;
-        px_inc       = 2.0 / vw;
+        px_inc           = 2.0 / max(range.y - range.x, 1.0);
     }
 
     if (grad_type == XVG_COLOUR_LINEAR_GRADIENT)
@@ -487,41 +485,60 @@ void main()
 
         float buffer_idx = mix(range.x, range.y, p.x * 0.5 + 0.5);
 
-        // buffer_idx       = is_right ? buffer_idx_range.y : buffer_idx_range.x;
-        // buffer_begin_idx = int(buffer_idx_range.x);
-        // buffer_end_idx   = int(buffer_idx_range.y);
+        // A fragment only ever tests against segments built from buffer samples near its own
+        // column - unlike the vertical extent (tested in full via p.y), sideways reach is
+        // bounded by how many indices we look. Near-horizontal stretches don't care (their
+        // stroke width is expressed mostly vertically), but near-vertical ones express their
+        // width mostly sideways, so reach must cover at least half the stroke width in x or
+        // the stroke comes out looking thinner than configured on steep stretches of the curve.
+        float index_spacing = px_inc * px_scale; // p_iso-space width covered by one buffer index step
+        float reach = clamp(ceil((stroke_width * 0.5) / max(index_spacing, 1e-6)), 2.0, 16.0);
 
         // If we pad the storage buffer by 1 on each side with real values, then we can get nicer looking clipped edges
-        float idx      = min(buffer_idx,     range.y - 1);
-        float idx_prev = max(buffer_idx - 1, range.x);
-        float idx_next = min(buffer_idx + 1, range.y - 1);
+        float idx          = min(buffer_idx,         range.y - 1);
+        float idx_prev1    = max(buffer_idx - 1,     range.x);
+        float idx_prev_far = max(buffer_idx - reach, range.x);
+        float idx_next1    = min(buffer_idx + 1,     range.y - 1);
+        float idx_next_far = min(buffer_idx + reach, range.y - 1);
 
-        float line_y      = line_buffer[int(idx)].y;
-        float line_y_prev = line_buffer[int(idx_prev)].y;
-        float line_y_next = line_buffer[int(idx_next)].y;
+        float line_y          = line_buffer[int(idx)].y;
+        float line_y_prev1    = line_buffer[int(idx_prev1)].y;
+        float line_y_prev_far = line_buffer[int(idx_prev_far)].y;
+        float line_y_next1    = line_buffer[int(idx_next1)].y;
+        float line_y_next_far = line_buffer[int(idx_next_far)].y;
 
-        line_y      = line_y      * 2 - 1;
-        line_y_prev = line_y_prev * 2 - 1;
-        line_y_next = line_y_next * 2 - 1;
+        line_y          = line_y          * 2 - 1;
+        line_y_prev1    = line_y_prev1    * 2 - 1;
+        line_y_prev_far = line_y_prev_far * 2 - 1;
+        line_y_next1    = line_y_next1    * 2 - 1;
+        line_y_next_far = line_y_next_far * 2 - 1;
 
-        // Technically makes the line less accurate, but it helps top half the stroke width getting cropped at the top & bottom edges of the rectangle. 
+        // Technically makes the line less accurate, but it helps top half the stroke width getting cropped at the top & bottom edges of the rectangle.
         // Might remove later if this causes other issues...
-        float stroke_scale  = 1 - stroke_width;
-        line_y             *= stroke_scale;
-        line_y_prev        *= stroke_scale;
-        line_y_next        *= stroke_scale;
+        float stroke_scale = 1 - stroke_width;
+        line_y          *= stroke_scale;
+        line_y_prev1    *= stroke_scale;
+        line_y_prev_far *= stroke_scale;
+        line_y_next1    *= stroke_scale;
+        line_y_next_far *= stroke_scale;
 
         // build points, aspect-corrected so distance is isotropic (1 unit == vh*0.5 px on both axes).
         // Without this, stroke width varies with segment angle since p.x and p.y otherwise represent
         // different pixel scales (the rect is usually wider than it is tall).
         vec2 p_iso = p * p_scale;
-        vec2 a = vec2((p.x - px_inc) * px_scale, line_y_prev);
-        vec2 b = vec2( p.x           * px_scale, line_y);
-        vec2 c = vec2((p.x + px_inc) * px_scale, line_y_next);
+        vec2 a_far = vec2((p.x - px_inc * reach) * px_scale, line_y_prev_far);
+        vec2 a1    = vec2((p.x - px_inc)         * px_scale, line_y_prev1);
+        vec2 b     = vec2( p.x                   * px_scale, line_y);
+        vec2 c1    = vec2((p.x + px_inc)         * px_scale, line_y_next1);
+        vec2 c_far = vec2((p.x + px_inc * reach) * px_scale, line_y_next_far);
 
-        float d1 = sdSegment(p_iso, a, b);
-        float d2 = sdSegment(p_iso, b, c);
-        float d  = min(d1, d2);
+        // The two 1-pixel-long inner segments trace the curve accurately close to the sample
+        // point; the two outer segments reach out to `reach` so the distance field stays
+        // continuous (no under-covered stroke) at joints and on steep/near-vertical stretches.
+        float d = sdSegment(p_iso, a1, b);
+        d = min(d, sdSegment(p_iso, b, c1));
+        d = min(d, sdSegment(p_iso, a_far, a1));
+        d = min(d, sdSegment(p_iso, c1, c_far));
 
         float f = min(feather, stroke_width);
 
