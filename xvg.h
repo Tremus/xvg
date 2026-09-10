@@ -2277,7 +2277,8 @@ const XVGTextLayout* xvg_create_text_layout(
 
                 glyphs[layout->num_glyphs++] = glyph;
             }
-            XVG_ASSERT(glyph.rect.advance_x > 0);
+            // This assertion can fire on missing glyphs that overlab existing glyphs. eg diacritical marks (¨,`,´)
+            // XVG_ASSERT(glyph.rect.advance_x > 0);
 
             CursorX        += glyph.rect.advance_x;
             prev_glyph_idx  = glyph_idx;
