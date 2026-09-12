@@ -7,6 +7,7 @@
 #include <stb_rect_pack.h>
 
 /*
+// TODO: clean up the line plots API
 // TODO: increase max stroke width for line plots
 // TODO: support fallback fonts for missing glyphs
 // TODO: support colour gradients for text
@@ -60,7 +61,8 @@ typedef enum XVGShapeType
     XVG_SHAPE_ARC_BUTT_STROKE,
     XVG_SHAPE_LINE_ROUND, // TODO: butt?
     XVG_SHAPE_LINE_PLOT,
-    XVG_SHAPE_LINE_PLOT_BG,
+    XVG_SHAPE_LINE_PLOT_FILL_TOP,
+    XVG_SHAPE_LINE_PLOT_FILL_BOTTOM,
 } XVGShapeType;
 
 typedef enum XVGColourType
@@ -661,6 +663,18 @@ void _xvg_draw_line_plot_ex(
     XVGGradient     grad,
     XVGShapeType    shape_type,
     XVGBufferRange  range);
+
+XVGBufferRange _xvg_draw_line_plot_with_gradient_impl(
+    XVGCommandList* xcl,
+    int             x,
+    int             y,
+    int             width,
+    int             height,
+    const float*    data,
+    float           crop_br,
+    float           stroke_width,
+    XVGGradient     grad,
+    XVGShapeType    shape_type);
 
 // FONTS
 // These functions return font IDs. 0 is considered to be invalid
@@ -1612,7 +1626,17 @@ XVGBufferRange xvg_draw_line_plot_background_with_gradient(
     float           crop_br,
     XVGGradient     grad)
 {
-    return _xvg_draw_line_plot_with_gradient_impl(xcl, x, y, w, h, data, crop_br, 0, grad, XVG_SHAPE_LINE_PLOT_BG);
+    return _xvg_draw_line_plot_with_gradient_impl(
+        xcl,
+        x,
+        y,
+        w,
+        h,
+        data,
+        crop_br,
+        0,
+        grad,
+        XVG_SHAPE_LINE_PLOT_FILL_TOP);
 }
 
 XVGBufferRange xvg_draw_line_plot_background(
@@ -1626,7 +1650,17 @@ XVGBufferRange xvg_draw_line_plot_background(
     uint32_t        colour)
 {
     XVGGradient grad = {.colour1 = colour};
-    return _xvg_draw_line_plot_with_gradient_impl(xcl, x, y, w, h, data, crop_br, 0, grad, XVG_SHAPE_LINE_PLOT_BG);
+    return _xvg_draw_line_plot_with_gradient_impl(
+        xcl,
+        x,
+        y,
+        w,
+        h,
+        data,
+        crop_br,
+        0,
+        grad,
+        XVG_SHAPE_LINE_PLOT_FILL_TOP);
 }
 
 XVGFontSlot* _xvg_get_current_font_slot(XVG* xcl) { return &xcl->fonts[xcl->current_font_idx]; }

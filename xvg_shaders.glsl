@@ -97,19 +97,20 @@ out flat vec2 gradient_b;
 
 // 80-95, nothing. 16 bytes spare
 
-#define XVG_SHAPE_RECTANGLE_FILL   1
-#define XVG_SHAPE_RECTANGLE_STROKE 2
-#define XVG_SHAPE_CIRCLE_FILL      3
-#define XVG_SHAPE_CIRCLE_STROKE    4
-#define XVG_SHAPE_TRIANGLE_FILL    5
-#define XVG_SHAPE_TRIANGLE_STROKE  6
-#define XVG_SHAPE_PIE_FILL         7
-#define XVG_SHAPE_PIE_STROKE       8
-#define XVG_SHAPE_ARC_ROUND_STROKE 9
-#define XVG_SHAPE_ARC_BUTT_STROKE  10
-#define XVG_SHAPE_LINE_ROUND       11
-#define XVG_SHAPE_LINE_PLOT        12
-#define XVG_SHAPE_LINE_PLOT_BG     13
+#define XVG_SHAPE_RECTANGLE_FILL        1
+#define XVG_SHAPE_RECTANGLE_STROKE      2
+#define XVG_SHAPE_CIRCLE_FILL           3
+#define XVG_SHAPE_CIRCLE_STROKE         4
+#define XVG_SHAPE_TRIANGLE_FILL         5
+#define XVG_SHAPE_TRIANGLE_STROKE       6
+#define XVG_SHAPE_PIE_FILL              7
+#define XVG_SHAPE_PIE_STROKE            8
+#define XVG_SHAPE_ARC_ROUND_STROKE      9
+#define XVG_SHAPE_ARC_BUTT_STROKE       10
+#define XVG_SHAPE_LINE_ROUND            11
+#define XVG_SHAPE_LINE_PLOT             12
+#define XVG_SHAPE_LINE_PLOT_FILL_TOP    13
+#define XVG_SHAPE_LINE_PLOT_FILL_BOTTOM 14
 
 #define XVG_COLOUR_SOLID           0
 #define XVG_COLOUR_LINEAR_GRADIENT 1
@@ -173,7 +174,8 @@ void main() {
     if (sdf_type == XVG_SHAPE_RECTANGLE_FILL
     ||  sdf_type == XVG_SHAPE_RECTANGLE_STROKE
     ||  sdf_type == XVG_SHAPE_LINE_PLOT
-    ||  sdf_type == XVG_SHAPE_LINE_PLOT_BG
+    ||  sdf_type == XVG_SHAPE_LINE_PLOT_FILL_TOP
+    ||  sdf_type == XVG_SHAPE_LINE_PLOT_FILL_BOTTOM
         )
     {
         borderradius_arcpie = (unpackUnorm4x8(vert.borderradius_arcpie) * 255) / vec4(vh * 0.5);        
@@ -199,8 +201,9 @@ void main() {
     colour2 = vert.colour2;
 
     if (sdf_type == XVG_SHAPE_LINE_PLOT
-    ||  sdf_type == XVG_SHAPE_LINE_PLOT_BG
     ||  sdf_type == XVG_SHAPE_LINE_ROUND
+    ||  sdf_type == XVG_SHAPE_LINE_PLOT_FILL_TOP
+    ||  sdf_type == XVG_SHAPE_LINE_PLOT_FILL_BOTTOM
     )
     {
         vec2 range       = unpackUnorm2x16(vert.buffer_idx_range) * vec2(65535);
@@ -276,19 +279,20 @@ in flat vec2 gradient_b;
 out vec4 frag_color;
 
 #define PI 3.141592653589793
-#define XVG_SHAPE_RECTANGLE_FILL   1
-#define XVG_SHAPE_RECTANGLE_STROKE 2
-#define XVG_SHAPE_CIRCLE_FILL      3
-#define XVG_SHAPE_CIRCLE_STROKE    4
-#define XVG_SHAPE_TRIANGLE_FILL    5
-#define XVG_SHAPE_TRIANGLE_STROKE  6
-#define XVG_SHAPE_PIE_FILL         7
-#define XVG_SHAPE_PIE_STROKE       8
-#define XVG_SHAPE_ARC_ROUND_STROKE 9
-#define XVG_SHAPE_ARC_BUTT_STROKE  10
-#define XVG_SHAPE_LINE_ROUND       11
-#define XVG_SHAPE_LINE_PLOT        12
-#define XVG_SHAPE_LINE_PLOT_BG     13
+#define XVG_SHAPE_RECTANGLE_FILL        1
+#define XVG_SHAPE_RECTANGLE_STROKE      2
+#define XVG_SHAPE_CIRCLE_FILL           3
+#define XVG_SHAPE_CIRCLE_STROKE         4
+#define XVG_SHAPE_TRIANGLE_FILL         5
+#define XVG_SHAPE_TRIANGLE_STROKE       6
+#define XVG_SHAPE_PIE_FILL              7
+#define XVG_SHAPE_PIE_STROKE            8
+#define XVG_SHAPE_ARC_ROUND_STROKE      9
+#define XVG_SHAPE_ARC_BUTT_STROKE       10
+#define XVG_SHAPE_LINE_ROUND            11
+#define XVG_SHAPE_LINE_PLOT             12
+#define XVG_SHAPE_LINE_PLOT_FILL_TOP    13
+#define XVG_SHAPE_LINE_PLOT_FILL_BOTTOM 14
 
 #define XVG_COLOUR_SOLID  0
 #define XVG_COLOUR_LINEAR_GRADIENT 1
@@ -552,7 +556,7 @@ void main()
 
         shape *= crop_shape;
     }
-    if (sdf_type == XVG_SHAPE_LINE_PLOT_BG)
+    if (sdf_type == XVG_SHAPE_LINE_PLOT_FILL_TOP || sdf_type == XVG_SHAPE_LINE_PLOT_FILL_BOTTOM)
     {
         vec2 range = unpackUnorm2x16(buffer_idx_range) * vec2(65535);
         float buffer_idx = mix(range.x, range.y, p.x * 0.5 + 0.5);
@@ -560,7 +564,14 @@ void main()
         float line_y      = line_buffer[int(idx)].y;
 
         float uv_y = p.y * 0.5 + 0.5;
-        shape = uv_y < abs(line_y) ? 1.0 : 0.0;
+
+        if (sdf_type == XVG_SHAPE_LINE_PLOT_FILL_BOTTOM)
+            line_y = line_y + 1;
+
+        shape = uv_y < line_y ? 1.0 : 0.0;
+
+        if (sdf_type == XVG_SHAPE_LINE_PLOT_FILL_BOTTOM)
+            shape = 1 - shape;
     }
 
 
