@@ -565,13 +565,8 @@ void main()
 
         float uv_y = p.y * 0.5 + 0.5;
 
-        if (sdf_type == XVG_SHAPE_LINE_PLOT_FILL_BOTTOM)
-            line_y = line_y + 1;
-
-        shape = uv_y < line_y ? 1.0 : 0.0;
-
-        if (sdf_type == XVG_SHAPE_LINE_PLOT_FILL_BOTTOM)
-            shape = 1 - shape;
+        bool should_fill = sdf_type == XVG_SHAPE_LINE_PLOT_FILL_TOP ? uv_y < line_y : uv_y > line_y;
+        shape = should_fill ? 1.0 : 0.0;
     }
 
 
