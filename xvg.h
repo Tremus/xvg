@@ -1751,6 +1751,9 @@ void xvg_set_font(XVG* xvg, XVGFont font) { xvg_set_font_ex(xvg, font, font._wei
 
 bool xvg_set_font_ex(XVG* xvg, XVGFont font, int weight)
 {
+    if (weight == 0)
+        weight = 500;
+
     int next_font_idx = font._slot_num - 1;
     if (next_font_idx < 0)
         next_font_idx = 0;
@@ -1758,8 +1761,7 @@ bool xvg_set_font_ex(XVG* xvg, XVGFont font, int weight)
         next_font_idx = XVG_ARRLEN(xvg->fonts) - 1;
     xvg->current_font_idx = next_font_idx;
 
-    if (weight == 0)
-        weight = 500;
+    xvg->current_font = font;
 
     XVGFontSlot* sl = &xvg->fonts[xvg->current_font_idx];
     if (sl->coords && sl->wght_index >= 0)
@@ -1773,8 +1775,6 @@ bool xvg_set_font_ex(XVG* xvg, XVGFont font, int weight)
         XVG_ASSERT(err == 0);
         return err == 0;
     }
-
-    xvg->current_font = font;
 
     return false;
 }
