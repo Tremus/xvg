@@ -406,6 +406,8 @@ typedef struct XVGCommandList
     xvg_text_t         text[XVG_TEXT_CAPACITY];
 } XVGCommandList;
 
+// clang-format off
+
 // Line indexes max out at UIN16_MAX. It's required by the shader
 // If you need more, consider using a custom shader
 _Static_assert(XVG_LINE_SEGMENTS_CAPACITY <= (1 << 16) - 1, "It's not going to fit!");
@@ -469,26 +471,14 @@ typedef struct XVGGradient
 } XVGGradient;
 
 XVGGradient xvg_make_linear_gradient(uint32_t col_1, uint32_t col_2, float x_1, float y_1, float x_2, float y_2);
-
-XVGGradient
-xvg_make_radial_gradient(uint32_t col_inner, uint32_t col_outer, float cx, float cy, float x_radius, float y_radius);
-
+XVGGradient xvg_make_radial_gradient(uint32_t col_inner, uint32_t col_outer, float cx, float cy, float x_radius, float y_radius);
 XVGGradient xvg_make_conic_gradient(uint32_t col_1, uint32_t col_2, float angle_1, float angle_2);
-
 // Shadows blur radius is on the inside of the shape.
 // Be sure to expand the area (w/h) by the radius value when drawing drop shadows
 // Be sure to expand the spread by (radius * -1) when drawing inner shadows
 // This will help you to maintain the correct shape proportions
 // If 'is_inner_shadow' is false, shadow is drop shadow
-XVGGradient xvg_make_shadow(
-    uint32_t col_outer,
-    uint32_t col_inner,
-    float    x_translate,
-    float    y_translate,
-    float    radius,
-    float    spread,
-    bool     is_inner_shadow);
-
+XVGGradient xvg_make_shadow(uint32_t col_outer, uint32_t col_inner, float x_translate, float y_translate, float radius, float spread, bool is_inner_shadow);
 // x/y/w/h are the coords of the image getting sampled
 // Saturation can be applied to change the colour of the image, inluding the opacity ie. ffffff7f (50% opacity)
 XVGGradient xvg_make_image_fill(sg_view texture, sg_sampler sampler, int x, int y, int w, int h, uint32_t sat);
@@ -496,105 +486,33 @@ XVGGradient xvg_make_image_fill(sg_view texture, sg_sampler sampler, int x, int 
 void xvg_gradient_apply_image(XVGGradient* grad, sg_view texture, sg_sampler sampler, int x, int y, int w, int h);
 
 // Hard corners, edges snapped to pixels. Horizontal and vertical only
-void xvg_draw_solid_rectangle(XVGCommandList*, int x, int y, int width, int height, unsigned col);
 void xvg_draw_solid_rectangle_with_gradient(XVGCommandList*, int x, int y, int width, int height, XVGGradient grad);
+static void xvg_draw_solid_rectangle(XVGCommandList* xcl, int x, int y, int width, int height, unsigned col) { xvg_draw_solid_rectangle_with_gradient(xcl, x, y, width, height, (XVGGradient){.colour1 = col}); }
 
 // Soft corners & edges
-void xvg_draw_rectangle(XVGCommandList*, float x, float y, float w, float h, float br, float stroke_px, uint32_t col);
-void xvg_draw_rectangle_with_gradient(
-    XVGCommandList* xcl,
-    float           x,
-    float           y,
-    float           w,
-    float           h,
-    float           br,
-    float           stroke,
-    XVGGradient     grad);
-void xvg_draw_rectangle_with_gradient_ex(
-    XVGCommandList* xcl,
-    float           x,
-    float           y,
-    float           w,
-    float           h,
-    float           br_tr,
-    float           br_br,
-    float           br_tl,
-    float           br_bl,
-    float           stroke,
-    XVGGradient     grad);
+void xvg_draw_rectangle_with_gradient_ex(XVGCommandList*, float x, float y, float w, float h, float br_tr, float br_br, float br_tl, float br_bl, float stroke, XVGGradient grad);
+static void xvg_draw_rectangle_with_gradient(XVGCommandList* xcl, float x, float y, float w, float h, float br, float stroke_px, XVGGradient grad) { xvg_draw_rectangle_with_gradient_ex(xcl, x, y, w, h, br, br, br, br, stroke_px, grad); }
+static void xvg_draw_rectangle(XVGCommandList* xcl, float x, float y, float w, float h, float br, float stroke_px, uint32_t col) { xvg_draw_rectangle_with_gradient_ex(xcl, x, y, w, h, br, br, br, br, stroke_px, (XVGGradient){.colour1 = col}); }
 
-void xvg_draw_circle(XVGCommandList*, float cx, float cy, float radius_px, float stroke_width, uint32_t col);
+// Circle
 void xvg_draw_circle_with_gradient(XVGCommandList*, float cx, float cy, float radius_px, float sw, XVGGradient grad);
+static void xvg_draw_circle(XVGCommandList* xcl, float cx, float cy, float radius_px, float stroke_width, uint32_t col) { xvg_draw_circle_with_gradient(xcl, cx, cy, radius_px, stroke_width, (XVGGradient){.colour1 = col}); }
 
 // Equilateral triangle
-void xvg_draw_triangle(
-    XVGCommandList*,
-    float    x,
-    float    y,
-    float    w,
-    float    h,
-    float    rotate,
-    float    stroke_px,
-    uint32_t col);
-void xvg_draw_triangle_with_gradient(
-    XVGCommandList* xcl,
-    float           x,
-    float           y,
-    float           w,
-    float           h,
-    float           rotate,
-    float           stroke,
-    XVGGradient     grad);
+void xvg_draw_triangle_with_gradient(XVGCommandList*, float x, float y, float w, float h, float rotate, float stroke, XVGGradient grad);
+void xvg_draw_triangle(XVGCommandList*, float x, float y, float w, float h, float rotate, float stroke_px, uint32_t col);
 
-void xvg_draw_pie(
-    XVGCommandList* xcl,
-    float           cx,
-    float           cy,
-    float           radius_px,
-    float           angle_start,
-    float           angle_end,
-    float           stroke_px,
-    uint32_t        col);
-void xvg_draw_pie_with_gradient(
-    XVGCommandList* xcl,
-    float           cx,
-    float           cy,
-    float           radius_px,
-    float           angle_start,
-    float           angle_end,
-    float           stroke_px,
-    XVGGradient     grad);
+// Pie
+void xvg_draw_pie_with_gradient(XVGCommandList* xcl, float cx, float cy, float radius_px, float angle_start, float angle_end, float stroke_px, XVGGradient grad);
+static void xvg_draw_pie(XVGCommandList* xcl, float cx, float cy, float radius_px, float start_turn, float end_turn, float stroke_px, uint32_t col) { xvg_draw_pie_with_gradient(xcl, cx, cy, radius_px, start_turn, end_turn, stroke_px, (XVGGradient){.colour1 = col}); }
 
-void xvg_draw_arc(
-    XVGCommandList* xcl,
-    float           cx,
-    float           cy,
-    float           radius_px,
-    float           start_turn,
-    float           end_turn,
-    float           stroke_px,
-    bool            butt,
-    uint32_t        col);
-void xvg_draw_arc_with_gradient(
-    XVGCommandList* xcl,
-    float           cx,
-    float           cy,
-    float           radius_px,
-    float           start_turn,
-    float           end_turn,
-    float           stroke_px,
-    bool            butt,
-    XVGGradient     grad);
+// Arc (stroked). Round & sharp (butt) edges are available
+void xvg_draw_arc_with_gradient(XVGCommandList*, float cx, float cy, float radius_px, float start_turn, float end_turn, float stroke_px, bool butt, XVGGradient grad);
+static void xvg_draw_arc(XVGCommandList* xcl, float cx, float cy, float radius_px, float start_turn, float end_turn, float stroke_px, bool butt, uint32_t col) { xvg_draw_arc_with_gradient(xcl, cx, cy, radius_px, start_turn, end_turn, stroke_px, butt, (XVGGradient){.colour1 = col}); }
 
-void xvg_draw_line_round_with_gradient(
-    XVGCommandList* xcl,
-    float           x0,
-    float           y0,
-    float           x1,
-    float           y1,
-    float           stroke,
-    XVGGradient     grad);
-void xvg_draw_line_round(XVGCommandList* xcl, float x0, float y0, float x1, float y1, float stroke_width, unsigned col);
+// Line with round edges
+void xvg_draw_line_round_with_gradient(XVGCommandList*, float x0, float y0, float x1, float y1, float stroke, XVGGradient grad);
+static void xvg_draw_line_round(XVGCommandList* xcl, float x0, float y0, float x1, float y1, float stroke_px, unsigned col) { xvg_draw_line_round_with_gradient(xcl, x0, y0, x1, y1, stroke_px, (XVGGradient){.colour1 = col}); }
 
 // Useful for reusing line data used by other plots
 typedef union XVGBufferRange
@@ -612,69 +530,14 @@ typedef union XVGBufferRange
 // 'data' is allowed to go beyond [0-1], it will just get cropped
 // 'stroke_px' is limited to the range [1-2]
 // 'br' crops the line at the corners of the rectangle you're drawing
-XVGBufferRange xvg_draw_line_plot(
-    XVGCommandList* xcl,
-    int             x,
-    int             y,
-    int             w,
-    int             h,
-    const float*    data,
-    float           br,
-    float           stroke_px,
-    uint32_t        col);
-XVGBufferRange xvg_draw_line_plot_with_gradient(
-    XVGCommandList* xcl,
-    int             x,
-    int             y,
-    int             w,
-    int             h,
-    const float*    data,
-    float           br,
-    float           stroke_px,
-    XVGGradient     grad);
-XVGBufferRange xvg_draw_line_plot_background(
-    XVGCommandList* xcl,
-    int             x,
-    int             y,
-    int             w,
-    int             h,
-    const float*    data,
-    float           br,
-    uint32_t        col);
-XVGBufferRange xvg_draw_line_plot_background_with_gradient(
-    XVGCommandList* xcl,
-    int             x,
-    int             y,
-    int             w,
-    int             h,
-    const float*    data,
-    float           br,
-    XVGGradient     grad);
+XVGBufferRange xvg_draw_line_plot(XVGCommandList*, int x, int y, int w, int h, const float* data, float br, float stroke_px, uint32_t col);
+XVGBufferRange xvg_draw_line_plot_with_gradient(XVGCommandList*, int x, int y, int w, int h, const float* data, float br, float stroke_px, XVGGradient grad);
+XVGBufferRange xvg_draw_line_plot_background(XVGCommandList*, int x, int y, int w, int h, const float* data, float br, uint32_t col);
+XVGBufferRange xvg_draw_line_plot_background_with_gradient(XVGCommandList*, int x, int y, int w, int h, const float* data, float br, XVGGradient grad);
 
 // Lower level API used for reusing existing parts of the line buffer
-void _xvg_draw_line_plot_ex(
-    XVGCommandList* xcl,
-    int             x,
-    int             y,
-    int             width,
-    int             height,
-    float           crop_br,
-    float           stroke_width,
-    XVGGradient     grad,
-    XVGShapeType    shape_type,
-    XVGBufferRange  range);
-
-XVGBufferRange _xvg_draw_line_plot_with_gradient_impl(
-    XVGCommandList* xcl,
-    int             x,
-    int             y,
-    int             width,
-    int             height,
-    const float*    data,
-    float           crop_br,
-    float           stroke_width,
-    XVGGradient     grad,
-    XVGShapeType    shape_type);
+void _xvg_draw_line_plot_ex(XVGCommandList*, int x, int y, int width, int height, float crop_br, float stroke_width, XVGGradient grad, XVGShapeType shape_type, XVGBufferRange range);
+XVGBufferRange _xvg_draw_line_plot_with_gradient_impl(XVGCommandList*, int x, int y, int width, int height, const float* data, float crop_br, float stroke_width, XVGGradient grad, XVGShapeType shape_type);
 
 // FONTS
 // These functions return font IDs. 0 is considered to be invalid
@@ -696,27 +559,8 @@ void xvg_set_font(XVG*, XVGFont);
 // TODO: support italics ('ital')
 bool xvg_set_font_ex(XVG*, XVGFont font, int weight);
 
-void xvg_draw_text(
-    XVGCommandList* xcl,
-    float           x,
-    float           y,
-    const char*     text_begin,
-    const char*     text_end,
-    unsigned        font_size,
-    XVGAlign        align,
-    uint32_t        col);
-void xvg_draw_text_ex(
-    XVGCommandList* xcl,
-    float           x,
-    float           y,
-    const char*     text_start,
-    const char*     text_end,
-    unsigned        font_size,
-    XVGAlign        alignment,
-    XVGDecoration   decoration,
-    uint32_t        colour,
-    float           break_width,
-    float           line_height_scale);
+void xvg_draw_text(XVGCommandList*, float x, float y, const char* text_begin, const char* text_end, unsigned font_size, XVGAlign align, uint32_t col);
+void xvg_draw_text_ex(XVGCommandList*, float x, float y, const char* text_start, const char* text_end, unsigned font_size, XVGAlign alignment, XVGDecoration decoration, uint32_t colour, float break_width, float line_height_scale);
 
 // 'start_x' is the x position (in the same coordinate space as 'break_width') that the first row's
 // cursor begins at. This lets a run of text that continues mid-line (eg. after a differently-styled
@@ -727,27 +571,14 @@ void xvg_draw_text_ex(
 // 'should_clip_ellipsis' truncates the current row instead of wrapping it once it would exceed
 // 'break_width': trailing glyphs are removed and replaced with three '.' glyphs, and no further
 // text is laid out after that point (even text after an explicit '\n').
-const XVGTextLayout* xvg_create_text_layout(
-    XVGCommandList* xcl,
-    const char*     text_start,
-    const char*     text_end,
-    unsigned        font_size,
-    float           start_x,
-    float           break_width,
-    float           line_height_scale,
-    bool            should_clip_ellipsis);
+const XVGTextLayout* xvg_create_text_layout(XVGCommandList* xcl, const char* text_start, const char* text_end, unsigned font_size, float start_x, float break_width, float line_height_scale, bool should_clip_ellipsis);
 static void xvg_release_text_layout(XVGCommandList* xcl, const XVGTextLayout* layout)
 {
     linked_arena_release(xcl->arena, layout);
 };
-void xvg_draw_text_layout(
-    XVGCommandList*      xcl,
-    const XVGTextLayout* layout,
-    int                  x,
-    int                  y,
-    int                  align,
-    XVGDecoration        dec,
-    uint32_t             col);
+void xvg_draw_text_layout(XVGCommandList*, const XVGTextLayout* layout, int x, int y, int align, XVGDecoration dec, uint32_t col);
+
+// clang-format on
 
 // ICONS
 // Still a draft API. Reuses the text pipeline. Render directly into the atlas used by text.
@@ -1210,12 +1041,6 @@ void xvg_draw_circle_with_gradient(
     };
 }
 
-void xvg_draw_circle(XVGCommandList* xcl, float cx, float cy, float radius_px, float stroke_width, uint32_t col)
-{
-    XVGGradient grad = {.colour1 = col};
-    xvg_draw_circle_with_gradient(xcl, cx, cy, radius_px, stroke_width, grad);
-}
-
 void xvg_draw_solid_rectangle_with_gradient(XVGCommandList* xcl, int x, int y, int width, int height, XVGGradient grad)
 {
     unsigned tex_idx = _xvg_set_bound_texture(xcl, &grad);
@@ -1233,12 +1058,6 @@ void xvg_draw_solid_rectangle_with_gradient(XVGCommandList* xcl, int x, int y, i
                     .texcoords_xy        = grad.xy,
                     .texcoords_wh        = grad.wh,
     };
-}
-
-void xvg_draw_solid_rectangle(XVGCommandList* xcl, int x, int y, int width, int height, unsigned col)
-{
-    XVGGradient grad = {.colour1 = col};
-    xvg_draw_solid_rectangle_with_gradient(xcl, x, y, width, height, grad);
 }
 
 void xvg_draw_rectangle_with_gradient_ex(
@@ -1271,33 +1090,6 @@ void xvg_draw_rectangle_with_gradient_ex(
                     .texcoords_xy = grad.xy,
                     .texcoords_wh = grad.wh,
     };
-}
-
-void xvg_draw_rectangle(
-    XVGCommandList* xcl,
-    float           x,
-    float           y,
-    float           w,
-    float           h,
-    float           br,
-    float           stroke_width,
-    uint32_t        col)
-{
-    XVGGradient grad = {.colour1 = col};
-    xvg_draw_rectangle_with_gradient_ex(xcl, x, y, w, h, br, br, br, br, stroke_width, grad);
-}
-
-void xvg_draw_rectangle_with_gradient(
-    XVGCommandList* xcl,
-    float           x,
-    float           y,
-    float           w,
-    float           h,
-    float           br,
-    float           stroke_width,
-    XVGGradient     grad)
-{
-    xvg_draw_rectangle_with_gradient_ex(xcl, x, y, w, h, br, br, br, br, stroke_width, grad);
 }
 
 void xvg_draw_triangle_with_gradient(
@@ -1372,20 +1164,6 @@ void xvg_draw_pie_with_gradient(
     };
 }
 
-void xvg_draw_pie(
-    XVGCommandList* xcl,
-    float           cx,
-    float           cy,
-    float           radius_px,
-    float           start_turn,
-    float           end_turn,
-    float           stroke_width,
-    uint32_t        colour)
-{
-    XVGGradient grad = {.colour1 = colour};
-    xvg_draw_pie_with_gradient(xcl, cx, cy, radius_px, start_turn, end_turn, stroke_width, grad);
-}
-
 void xvg_draw_arc_with_gradient(
     XVGCommandList* xcl,
     float           cx,
@@ -1433,21 +1211,6 @@ void xvg_draw_arc_with_gradient(
     };
 }
 
-void xvg_draw_arc(
-    XVGCommandList* xcl,
-    float           cx,
-    float           cy,
-    float           radius_px,
-    float           start_turn,
-    float           end_turn,
-    float           stroke_width,
-    bool            butt,
-    uint32_t        colour)
-{
-    XVGGradient grad = {.colour1 = colour};
-    xvg_draw_arc_with_gradient(xcl, cx, cy, radius_px, start_turn, end_turn, stroke_width, butt, grad);
-}
-
 void xvg_draw_line_round_with_gradient(
     XVGCommandList* xcl,
     float           x0,
@@ -1487,12 +1250,6 @@ void xvg_draw_line_round_with_gradient(
                     .texcoords_wh        = grad.wh,
                     .buffer_idx_range    = line_is_descending ? 1 : 0,
     };
-}
-
-void xvg_draw_line_round(XVGCommandList* xcl, float x0, float y0, float x1, float y1, float stroke_width, unsigned col)
-{
-    XVGGradient grad = {.colour1 = col};
-    xvg_draw_line_round_with_gradient(xcl, x0, y0, x1, y1, stroke_width, grad);
 }
 
 XVGBufferRange _xvg_add_line(XVGCommandList* xcl, const float* data, int len)
