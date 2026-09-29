@@ -489,6 +489,9 @@ void main()
 
         float buffer_idx = mix(range.x, range.y, p.x * 0.5 + 0.5);
 
+        // TODO: We read 5 samples to deal with macOS backingScaleFactor nonsense. Windows and Linux don't do this.
+        // It might be worth making a macro just for mac so those devices can read 5 samples, and others can read 3.
+
         // A fragment only ever tests against segments built from buffer samples near its own
         // column - unlike the vertical extent (tested in full via p.y), sideways reach is
         // bounded by how many indices we look. Near-horizontal stretches don't care (their
