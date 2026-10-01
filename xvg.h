@@ -294,7 +294,8 @@ typedef struct XVG
 // Commands
 typedef struct XVGCommandBeginPass
 {
-    int pass_idx;
+    int   pass_idx;
+    float width, height;
 } XVGCommandBeginPass;
 
 typedef struct XVGCommandSetScissor
@@ -419,7 +420,8 @@ void xvg_deinit(XVG*);
 // Pass num_xxx = 0 to set defaults
 XVGCommandList* xvg_command_list_create(XVG*);
 
-void xvg_command_begin_pass(XVGCommandList*, const sg_pass*, const char* label);
+// width & height are the logical size of the pass's render target
+void xvg_command_begin_pass(XVGCommandList*, const sg_pass*, float width, float height, const char* label);
 void xvg_command_end_pass(XVGCommandList*, const char* label);
 void xvg_command_set_scissor(XVGCommandList*, int x, int y, int w, int h, const char* label);
 void xvg_command_set_viewport(XVGCommandList*, int x, int y, int w, int h, const char* label);
@@ -445,7 +447,7 @@ void xvg_command_list_range_scale_opacity(XVGCommandList* xcl, const XVGCommandL
 void xvg_begin_frame(XVG*);
 void xvg_end_frame(XVG*);
 void xvg_command_list_begin_frame(XVGCommandList* xcl);
-void xvg_command_list_end_frame(XVGCommandList* xcl, int window_width, int window_height);
+void xvg_command_list_end_frame(XVGCommandList* xcl);
 
 // Shapes
 // Unlike canvas style APIs, there are no 'fill' and 'stroke' commands. If 'stroke_width' is 0 the shape is implicitly
@@ -717,8 +719,11 @@ XVGCommand* _xvg_get_command(XVGCommandList* xcl, XVGCommandType type, const cha
     return cmd;
 }
 
-void xvg_command_begin_pass(XVGCommandList* xcl, const sg_pass* pass, const char* label)
+void xvg_command_begin_pass(XVGCommandList* xcl, const sg_pass* pass, float width, float height, const char* label)
 {
+    XVG_ASSERT(width > 0 && height > 0);
+    xvg_command_batch_draw(xcl, XVG_LABEL("xvg_command_begin_pass()"));
+
     XVGCommand* cmd = _xvg_get_command(xcl, XVG_CMD_BEGIN_PASS, label);
     int         idx = ++xcl->frame.num_passes < XVG_ARRLEN(xcl->passes) ? xcl->frame.num_passes : 0;
     if (idx != 0)
@@ -726,6 +731,8 @@ void xvg_command_begin_pass(XVGCommandList* xcl, const sg_pass* pass, const char
         xcl->passes[idx] = *pass;
     }
     cmd->beginPass.pass_idx = idx;
+    cmd->beginPass.width    = width;
+    cmd->beginPass.height   = height;
 }
 
 void xvg_command_end_pass(XVGCommandList* xcl, const char* label)
@@ -2651,7 +2658,7 @@ void xvg_end_frame(XVG* xcl)
 
 void xvg_command_list_begin_frame(XVGCommandList* xcl) { memset(&xcl->frame, 0, sizeof(xcl->frame)); }
 
-void xvg_command_list_end_frame(XVGCommandList* xcl, int window_width, int window_height)
+void xvg_command_list_end_frame(XVGCommandList* xcl)
 {
     xvg_command_batch_draw(xcl, XVG_LABEL("xvg_end_frame"));
     XVG* xvg = xcl->xvg;
@@ -2684,10 +2691,13 @@ void xvg_command_list_end_frame(XVGCommandList* xcl, int window_width, int windo
     }
 
     // Process commands
-    int ncommands        = 0;
-    int num_batch_groups = 0;
-    int cmd_idx          = xcl->frame.first_command_idx;
-    int inf_protection   = 0;
+    // Logical size of the current pass's render target. Set by each pass, in the order they're replayed
+    float pass_width       = 0;
+    float pass_height      = 0;
+    int   ncommands        = 0;
+    int   num_batch_groups = 0;
+    int   cmd_idx          = xcl->frame.first_command_idx;
+    int   inf_protection   = 0;
     while (cmd_idx > 0 && cmd_idx < XVG_ARRLEN(xcl->commands) && inf_protection++ < XVG_ARRLEN(xcl->commands))
     {
         XVG_ASSERT(inf_protection < XVG_ARRLEN(xcl->commands));
@@ -2701,6 +2711,8 @@ void xvg_command_list_end_frame(XVGCommandList* xcl, int window_width, int windo
             XVGCommandBeginPass* p = &cmd->beginPass;
             XVG_ASSERT(p->pass_idx > 0 && p->pass_idx < XVG_ARRLEN(xcl->passes));
             sg_begin_pass(&xcl->passes[p->pass_idx]);
+            pass_width  = p->width;
+            pass_height = p->height;
             break;
         }
         case XVG_CMD_END_PASS:
@@ -2760,7 +2772,7 @@ void xvg_command_list_end_frame(XVGCommandList* xcl, int window_width, int windo
                 });
 
                 vs_xvg_shapes_uniforms_t uniforms = {
-                    .u_size                  = {window_width, window_height},
+                    .u_size                  = {pass_width, pass_height},
                     .u_storage_buffer_offset = draw->shape_buffer_start,
                 };
 
@@ -2812,7 +2824,7 @@ void xvg_command_list_end_frame(XVGCommandList* xcl, int window_width, int windo
                 // clang-format on
 
                 vs_xvg_text_uniforms_t uniforms = {
-                    .u_view_size  = {window_width * xvg->backingScaleFactor, window_height * xvg->backingScaleFactor},
+                    .u_view_size  = {pass_width * xvg->backingScaleFactor, pass_height * xvg->backingScaleFactor},
                     .u_sbo_offset = draw->text_buffer_start,
                 };
                 sg_apply_uniforms(UB_vs_xvg_text_uniforms, &SG_RANGE(uniforms));
