@@ -2457,8 +2457,8 @@ void xvg_draw_text(
 
 void xvg_init(XVG* xcl)
 {
-    xcl->arena       = linked_arena_create_ex(0, 1024 * 512); // 0.5mb
-    xcl->frame_arena = linked_arena_create_ex(0, 1024 * 64);
+    xcl->arena       = linked_arena_create(0); // 0.5mb
+    xcl->frame_arena = linked_arena_create(0);
 
     xcl->backingScaleFactor = 1;
 
