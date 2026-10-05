@@ -481,7 +481,7 @@ XVGGradient xvg_make_conic_gradient(uint32_t col_1, uint32_t col_2, float angle_
 // This will help you to maintain the correct shape proportions
 // If 'is_inner_shadow' is false, shadow is drop shadow
 XVGGradient xvg_make_shadow(uint32_t col_outer, uint32_t col_inner, float x_translate, float y_translate, float radius, float spread, bool is_inner_shadow);
-// x/y/w/h are the coords of the image getting sampled
+// x/y/w/h are the coords from the image getting sampled, NOT the location you are drawing to
 // Saturation can be applied to change the colour of the image, inluding the opacity ie. ffffff7f (50% opacity)
 XVGGradient xvg_make_image_fill(sg_view texture, sg_sampler sampler, int x, int y, int w, int h, uint32_t sat);
 
