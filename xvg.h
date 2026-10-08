@@ -231,6 +231,8 @@ typedef struct XVGTextLayout
     // Designed to be easily cachable in an arena allocator
     int offset_rows;
     int offset_glyphs;
+
+    bool was_clipped;
 } XVGTextLayout;
 
 static XVGTextLayoutRow* xvg_layout_get_rows(const XVGTextLayout* l)
@@ -2117,7 +2119,9 @@ const XVGTextLayout* xvg_create_text_layout(
                 // If 'break_row_x_px' is too narrow to fit all three dots (eg. an extremely small
                 // break_width), stop adding dots once they'd overflow rather than drawing all three
                 // regardless — the ellipsis itself gets clipped instead of the row overflowing.
-                for (int i = 0; i < 3 && layout->num_glyphs < layout->cap_glyphs; i++)
+
+                int num_dots_added = 0;
+                for (; num_dots_added < 3 && layout->num_glyphs < layout->cap_glyphs; num_dots_added++)
                 {
                     XVGGlyphLayout dot       = {.rect = dot_rect, .x = (int)(CursorX >> 6), .y = (int)(CursorY >> 6)};
                     const int      dot_right = dot.x + dot.rect.w + dot.rect.bearing_x;
@@ -2133,6 +2137,8 @@ const XVGTextLayout* xvg_create_text_layout(
                 }
 
                 iter = text_end; // stop the outer while loop; nothing is laid out past the ellipsis
+
+                layout->was_clipped = true;
             }
             else if (should_break_word)
             {
