@@ -444,6 +444,8 @@ _Static_assert(
 XVGCommandListRange xvg_command_list_pop_begin(XVGCommandList* xcl);
 XVGCommandListRange xvg_command_list_pop_end(XVGCommandList* xcl, XVGCommandListRange* range);
 void                xvg_command_list_join(XVGCommandList* xcl, XVGCommandListRange* range);
+// Similar to xvg_command_list_join, except adds the range to the front
+void xvg_command_list_join_front(XVGCommandList* xcl, XVGCommandListRange* range);
 void xvg_command_list_range_scale_opacity(XVGCommandList* xcl, const XVGCommandListRange* range, float opacity);
 
 void xvg_begin_frame(XVG*);
@@ -840,6 +842,19 @@ void xvg_command_list_join(XVGCommandList* xcl, XVGCommandListRange* range)
     xcl->commands[xcl->frame.last_command_idx].next_idx = range->begin_num_commands + 1;
 
     xcl->frame.last_command_idx = range->end_idx;
+}
+
+void xvg_command_list_join_front(XVGCommandList* xcl, XVGCommandListRange* range)
+{
+    if (range->end_idx == 0)
+        return;
+
+    XVG_ASSERT(range->begin_idx != 0);
+    XVG_ASSERT(xcl->commands[range->end_idx].next_idx == 0);
+
+    xcl->commands[range->end_idx].next_idx = xcl->frame.first_command_idx;
+
+    xcl->frame.first_command_idx = range->begin_num_commands + 1;
 }
 
 void xvg_command_list_range_scale_opacity(XVGCommandList* xcl, const XVGCommandListRange* range, float opacity)
