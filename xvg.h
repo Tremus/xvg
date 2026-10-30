@@ -1,6 +1,7 @@
 #ifndef XVG_H
 #define XVG_H
 
+// NOTE: depends on sokol_gfx (commit) 96691ad0505d0e136552d0a11e239ae5a78d9fbd
 #include "sokol_gfx.h"
 #include "xvg_shaders.glsl.h"
 #include <linked_arena.h>
@@ -178,6 +179,7 @@ typedef struct XVGAtlas
 {
     unsigned char* img_data;
     sg_view        img_view;
+    sg_buffer      staging; // img_data goes through this into the image, see xvg_end_frame()
     bool           dirty;
     bool           full;
 } XVGAtlas;
@@ -1595,18 +1597,26 @@ enum
 XVGAtlas _xvg_create_new_atlas()
 {
     sg_image img = sg_make_image(&(sg_image_desc){
-        .width                = XVG_ATLAS_WIDTH,
-        .height               = XVG_ATLAS_HEIGHT,
-        .pixel_format         = XVG_SG_PIXEL_FORMAT,
-        .usage.dynamic_update = true,
+        .width          = XVG_ATLAS_WIDTH,
+        .height         = XVG_ATLAS_HEIGHT,
+        .pixel_format   = XVG_SG_PIXEL_FORMAT,
+        .usage.copy_dst = true,
     });
     XVG_ASSERT(img.id);
 
-    XVGAtlas atlas = {.img_view = sg_make_view(&(sg_view_desc){.texture.image = img})};
-    XVG_ASSERT(atlas.img_view.id);
-
     const size_t img_size = XVG_ATLAS_HEIGHT * XVG_ATLAS_ROW_STRIDE;
-    atlas.img_data        = XVG_MALLOC(img_size);
+
+    XVGAtlas atlas = {
+        .img_view = sg_make_view(&(sg_view_desc){.texture.image = img}),
+        .staging  = sg_make_buffer(&(sg_buffer_desc){
+             .usage = {.staging_buffer = true, .write_transient = true, .copy_src = true},
+             .size  = img_size,
+        }),
+    };
+    XVG_ASSERT(atlas.img_view.id);
+    XVG_ASSERT(atlas.staging.id);
+
+    atlas.img_data = XVG_MALLOC(img_size);
     memset(atlas.img_data, 0, img_size);
 
     return atlas;
@@ -2538,12 +2548,12 @@ void xvg_init(XVG* xcl)
     static const uint32_t pixel_white = 0xffffffff;
 
     xcl->fallback_img      = sg_make_image(&(sg_image_desc){
-             .width              = 1,
-             .height             = 1,
-             .pixel_format       = SG_PIXELFORMAT_RGBA8,
-             .data.mip_levels[0] = {
-                 .ptr  = &pixel_white,
-                 .size = sizeof(pixel_white),
+             .width        = 1,
+             .height       = 1,
+             .pixel_format = SG_PIXELFORMAT_RGBA8,
+             .data         = {
+                         .ptr  = &pixel_white,
+                         .size = sizeof(pixel_white),
         }});
     xcl->fallback_img_view = sg_make_view(&(sg_view_desc){.texture = xcl->fallback_img});
 
@@ -2612,28 +2622,28 @@ XVGCommandList* xvg_command_list_create(XVG* xvg)
     xcl->arena = xvg->arena;
 
     xcl->shapes_sbo = sg_make_buffer(&(sg_buffer_desc){
-        .usage.storage_buffer = true,
-        .usage.stream_update  = true,
-        .size                 = sizeof(xcl->shapes),
-        .label                = XVG_LABEL("xcl-shapes"),
+        .usage.storage_buffer  = true,
+        .usage.write_transient = true,
+        .size                  = sizeof(xcl->shapes),
+        .label                 = XVG_LABEL("xcl-shapes"),
     });
     xcl->shapes_sbv = sg_make_view(&(sg_view_desc){
         .storage_buffer = xcl->shapes_sbo,
     });
 
     xcl->lines_sbo = sg_make_buffer(&(sg_buffer_desc){
-        .usage.storage_buffer = true,
-        .usage.stream_update  = true,
-        .size                 = sizeof(xcl->line_segments),
-        .label                = XVG_LABEL("xcl-line-buffer"),
+        .usage.storage_buffer  = true,
+        .usage.write_transient = true,
+        .size                  = sizeof(xcl->line_segments),
+        .label                 = XVG_LABEL("xcl-line-buffer"),
     });
     xcl->lines_sbv = sg_make_view(&(sg_view_desc){.storage_buffer = xcl->lines_sbo});
 
     xcl->text_sbo = sg_make_buffer(&(sg_buffer_desc){
-        .usage.storage_buffer = true,
-        .usage.stream_update  = true,
-        .size                 = sizeof(xcl->text),
-        .label                = XVG_LABEL("xcl-text-buffer"),
+        .usage.storage_buffer  = true,
+        .usage.write_transient = true,
+        .size                  = sizeof(xcl->text),
+        .label                 = XVG_LABEL("xcl-text-buffer"),
     });
     XVG_ASSERT(xcl->text_sbo.id);
     xcl->text_sbv = sg_make_view(&(sg_view_desc){
@@ -2664,14 +2674,17 @@ void xvg_end_frame(XVG* xcl)
         XVGAtlas* atlas = &xcl->atlases[i];
         if (atlas->dirty)
         {
+            // Images can't be written to from the CPU persistently, only copied into from a staging buffer.
+            // Must happen outside a pass
             sg_view_desc desc = sg_query_view_desc(atlas->img_view);
-            sg_update_image(
-                desc.texture.image,
-                &(sg_image_data){
-                    .mip_levels[0] = {
-                        .ptr  = atlas->img_data,
-                        .size = XVG_ATLAS_HEIGHT * XVG_ATLAS_ROW_STRIDE,
-                    }});
+            sg_write_buffer_transient(&(sg_write_buffer_desc){
+                .src.data   = {.ptr = atlas->img_data, .size = XVG_ATLAS_HEIGHT * XVG_ATLAS_ROW_STRIDE},
+                .dst.buffer = atlas->staging,
+            });
+            sg_copy_buffer_to_image(&(sg_copy_buffer_to_image_desc){
+                .src.buffer = atlas->staging,
+                .dst.image  = desc.texture.image,
+            });
             atlas->dirty = false;
         }
     }
@@ -2691,7 +2704,7 @@ void xvg_command_list_end_frame(XVGCommandList* xcl)
             xcl->frame.num_shapes = XVG_ARRLEN(xcl->shapes);
         size_t   num_bytes = sizeof(xcl->shapes[0]) * xcl->frame.num_shapes;
         sg_range range     = {.ptr = xcl->shapes, .size = num_bytes};
-        sg_update_buffer(xcl->shapes_sbo, &range);
+        sg_write_buffer_transient(&(sg_write_buffer_desc){.src.data = range, .dst.buffer = xcl->shapes_sbo});
     }
     if (xcl->frame.num_line_segments)
     {
@@ -2699,7 +2712,16 @@ void xvg_command_list_end_frame(XVGCommandList* xcl)
             xcl->frame.num_line_segments = XVG_ARRLEN(xcl->line_segments);
         size_t   num_bytes = sizeof(xcl->line_segments[0]) * xcl->frame.num_line_segments;
         sg_range range     = {.ptr = xcl->line_segments, .size = num_bytes};
-        sg_update_buffer(xcl->lines_sbo, &range);
+        sg_write_buffer_transient(&(sg_write_buffer_desc){.src.data = range, .dst.buffer = xcl->lines_sbo});
+    }
+    else
+    {
+        // sokol_gfx as of Oct 2026 requires "write_transient" buffers to receive new data every frame. If you bind
+        // these buffers for a draw call without writing to them, you trip on sokols assertions.
+        // If you're not drawing line segments, then you will likely trip on this assertion.
+        // Here we write 8 bytes as a cheap workaround to that issue.
+        static const uint64_t dummy = 0;
+        sg_write_buffer_transient(&(sg_write_buffer_desc){.src.data = SG_RANGE(dummy), .dst.buffer = xcl->lines_sbo});
     }
     if (xcl->frame.num_text)
     {
@@ -2708,7 +2730,7 @@ void xvg_command_list_end_frame(XVGCommandList* xcl)
 
         size_t   num_bytes = sizeof(xcl->text[0]) * xcl->frame.num_text;
         sg_range range     = {.ptr = xcl->text, .size = num_bytes};
-        sg_update_buffer(xcl->text_sbo, &range);
+        sg_write_buffer_transient(&(sg_write_buffer_desc){.src.data = range, .dst.buffer = xcl->text_sbo});
     }
 
     // Process commands
