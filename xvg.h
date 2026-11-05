@@ -31,7 +31,7 @@
 #ifndef NDEBUG
 #define XVG_LABEL(txt) txt
 #else
-#define XVG_LABEL(...) 0
+#define XVG_LABEL(...) NULL
 #endif
 
 #ifndef XVG_ASSERT
